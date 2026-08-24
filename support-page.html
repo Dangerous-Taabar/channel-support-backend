@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Channel Support Center</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap');
+
+  :root{
+    --bg:#08050f;
+    --bg-2:#0f0a1c;
+    --panel:#140d24cc;
+    --purple:#8b2fd1;
+    --violet:#7c3aed;
+    --magenta:#e0219c;
+    --pink:#ff2e9a;
+    --crimson:#ff1a4b;
+    --orange:#ff8a1e;
+    --gold:#ffd23f;
+    --white:#f5f2fb;
+    --muted:#a89ec2;
+    --border:#ff2e9a55;
+    --grad-main: linear-gradient(135deg,var(--purple),var(--magenta) 45%,var(--pink) 70%,var(--crimson));
+    --grad-gold: linear-gradient(135deg,var(--orange),var(--gold));
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, #7c3aed33, transparent 60%),
+      radial-gradient(ellipse 900px 600px at 110% 10%, #ff2e9a2e, transparent 60%),
+      radial-gradient(ellipse 700px 500px at 50% 110%, #ff8a1e1f, transparent 60%),
+      var(--bg);
+    color:var(--white);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+    overflow-x:hidden;
+  }
+  .noise{position:fixed; inset:0; pointer-events:none; opacity:.035; z-index:1;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' /%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .stage{position:relative; z-index:2; max-width:520px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:28px 20px 60px;}
+  .screen{display:none; animation:fadeUp .5s ease both;}
+  .screen.active{display:block;}
+  @keyframes fadeUp{from{opacity:0; transform:translateY(14px);} to{opacity:1; transform:translateY(0);}}
+
+  .brand-font{font-family:'Orbitron',sans-serif;}
+
+  /* ---------- HERO ---------- */
+  .hero{text-align:center; padding-top:8vh;}
+  .logo-badge{
+    width:120px; height:120px; margin:0 auto 22px; border-radius:50%;
+    background:var(--grad-main); display:flex; align-items:center; justify-content:center;
+    box-shadow:0 0 40px #ff2e9a66, 0 0 80px #7c3aed44, inset 0 0 20px #ffffff33;
+    position:relative; overflow:hidden;
+  }
+  .logo-badge::before{
+    content:''; position:absolute; inset:-6px; border-radius:50%;
+    background:conic-gradient(from 0deg, var(--purple), var(--pink), var(--gold), var(--purple));
+    z-index:-1; filter:blur(14px); opacity:.7; animation:spin 6s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .logo-badge span{font-size:44px; filter:drop-shadow(0 2px 4px #000);}
+  .eyebrow{
+    display:inline-block; font-size:11px; letter-spacing:3px; text-transform:uppercase;
+    color:var(--gold); font-weight:700; margin-bottom:10px;
+    text-shadow:0 0 12px #ffd23f88;
+  }
+  h1.brand-title{
+    font-family:'Orbitron',sans-serif; font-weight:900; font-size:34px; line-height:1.15;
+    background:var(--grad-main); -webkit-background-clip:text; background-clip:text; color:transparent;
+    text-shadow:0 0 40px #ff2e9a33;
+    margin-bottom:10px;
+  }
+  .hero p.sub{color:var(--muted); font-size:15px; line-height:1.6; max-width:380px; margin:0 auto 34px;}
+
+  .btn{
+    font-family:'Inter',sans-serif; font-weight:700; font-size:15px; letter-spacing:.3px;
+    border:none; border-radius:14px; cursor:pointer; padding:16px 26px;
+    color:#fff; width:100%; position:relative; overflow:hidden;
+    transition:transform .15s ease, box-shadow .25s ease;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn-glow{
+    background:var(--grad-main); background-size:200% 200%;
+    box-shadow:0 8px 24px -6px #ff2e9a77, 0 0 0 1px #ffffff22 inset;
+    animation:shine 4s ease infinite;
+  }
+  .btn-glow:hover{box-shadow:0 10px 32px -4px #ff2e9aaa, 0 0 0 1px #ffffff33 inset;}
+  @keyframes shine{0%,100%{background-position:0% 50%;}50%{background-position:100% 50%;}}
+  .btn-gold{background:var(--grad-gold); color:#1a0f00; box-shadow:0 8px 22px -6px #ffd23f88;}
+  .btn-ghost{
+    background:#ffffff0d; border:1px solid #ffffff26; backdrop-filter:blur(6px);
+  }
+  .btn-outline{background:transparent; border:1.5px solid var(--pink); color:var(--pink); box-shadow:0 0 20px -8px var(--pink);}
+  .btn-sm{padding:11px 16px; font-size:13px; width:auto;}
+  .btn[disabled]{opacity:.5; cursor:not-allowed;}
+
+  .stack{display:flex; flex-direction:column; gap:12px;}
+
+  /* ---------- CARD ---------- */
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:20px; padding:22px;
+    backdrop-filter:blur(14px); box-shadow:0 8px 30px -12px #00000099, inset 0 1px 0 #ffffff14;
+    position:relative; margin-bottom:16px;
+  }
+  .card::before{
+    content:''; position:absolute; inset:0; border-radius:20px; padding:1px;
+    background:linear-gradient(135deg,#ff2e9a66,transparent 40%,#7c3aed55);
+    -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude; pointer-events:none;
+  }
+  .card-label{font-size:11px; text-transform:uppercase; letter-spacing:2px; color:var(--muted); margin-bottom:6px; font-weight:700;}
+
+  .topbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:22px;}
+  .avatar-name{display:flex; align-items:center; gap:10px;}
+  .avatar{
+    width:44px; height:44px; border-radius:12px; background:var(--grad-main);
+    display:flex; align-items:center; justify-content:center; font-weight:800; font-family:'Orbitron';
+    box-shadow:0 0 16px #ff2e9a55;
+  }
+  .username{font-weight:800; font-size:16px;}
+  .rank-pill{font-size:11px; color:var(--gold); font-weight:700;}
+
+  .stat-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;}
+  .stat{
+    background:#ffffff08; border:1px solid #ffffff18; border-radius:16px; padding:16px; text-align:center;
+  }
+  .stat .num{font-family:'Orbitron'; font-weight:800; font-size:26px;
+    background:var(--grad-gold); -webkit-background-clip:text; background-clip:text; color:transparent;}
+  .stat .lbl{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-top:4px;}
+
+  input[type=text]{
+    width:100%; padding:15px 16px; border-radius:12px; border:1.5px solid #ffffff26;
+    background:#ffffff0d; color:var(--white); font-size:15px; outline:none; font-family:'Inter';
+  }
+  input[type=text]:focus{border-color:var(--pink); box-shadow:0 0 0 3px #ff2e9a33;}
+  label{font-size:12px; color:var(--muted); font-weight:600; display:block; margin-bottom:8px; text-transform:uppercase; letter-spacing:1px;}
+
+  .steps{display:flex; flex-direction:column; gap:10px; margin:18px 0;}
+  .step{display:flex; gap:12px; align-items:flex-start; padding:14px; border-radius:14px; background:#ffffff08; border:1px solid #ffffff14;}
+  .step.done{border-color:#3ddc8455; background:#3ddc8412;}
+  .step-num{
+    width:26px; height:26px; border-radius:8px; background:var(--grad-main); flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800;
+  }
+  .step.done .step-num{background:linear-gradient(135deg,#3ddc84,#1fae6a);}
+  .step-text b{display:block; font-size:14px; margin-bottom:2px;}
+  .step-text span{font-size:12px; color:var(--muted);}
+
+  .badge-verified{
+    display:inline-flex; align-items:center; gap:6px; background:#3ddc8420; color:#3ddc84;
+    padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; border:1px solid #3ddc8455;
+  }
+
+  .back-link{color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px; margin-bottom:18px;}
+  .back-link:hover{color:var(--white);}
+
+  #certCanvas{width:100%; border-radius:16px; box-shadow:0 12px 40px -10px #000000cc; margin-bottom:16px;}
+
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th,td{padding:10px 8px; text-align:left; border-bottom:1px solid #ffffff14;}
+  th{color:var(--muted); text-transform:uppercase; font-size:10px; letter-spacing:1px;}
+  tr:hover td{background:#ffffff06;}
+
+  .toast{
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); opacity:0;
+    background:#1a0f2ee6; border:1px solid var(--pink); padding:13px 22px; border-radius:12px;
+    font-size:13px; font-weight:600; z-index:99; transition:all .3s ease; box-shadow:0 8px 24px #000a; pointer-events:none;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  .footer-note{text-align:center; color:var(--muted); font-size:11px; margin-top:24px; line-height:1.6;}
+
+  ::placeholder{color:#8a7fa8;}
+  .row-between{display:flex; align-items:center; justify-content:space-between;}
+  .muted{color:var(--muted);}
+  .divider{height:1px; background:linear-gradient(90deg,transparent,#ffffff2a,transparent); margin:18px 0;}
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="stage">
+
+  <!-- ================= SCREEN: HERO ================= -->
+  <section class="screen active" id="screen-hero">
+    <div class="hero">
+      <div class="logo-badge" id="heroLogoBadge"><span>📺</span></div>
+      <div class="eyebrow">1st Anniversary Gift</div>
+      <h1 class="brand-title">Channel Support<br>Center</h1>
+      <p class="sub">Support the channel, complete your streak, unlock your verified supporter certificate — 100% free.</p>
+      <div class="stack">
+        <button class="btn btn-glow" onclick="goWelcome()">🚀 Welcome — Get Started</button>
+        <button class="btn btn-ghost" onclick="showScreen('screen-admin-login')" style="font-size:12px; padding:11px;">Admin Login</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= SCREEN: NAME CAPTURE ================= -->
+  <section class="screen" id="screen-name">
+    <div class="hero" style="padding-top:14vh;">
+      <div class="logo-badge" style="width:84px;height:84px;"><span style="font-size:30px;">👋</span></div>
+      <h1 class="brand-title" style="font-size:26px;">Naya Supporter?</h1>
+      <p class="sub">Apna naam bata do — yeh hamesha ke liye save ho jayega, agli baar aap khud recognize hoge.</p>
+      <div style="text-align:left; margin-bottom:16px;">
+        <label>Your Name</label>
+        <input type="text" id="nameInput" placeholder="e.g. Rohan">
+      </div>
+      <button class="btn btn-glow" onclick="saveName()">Continue →</button>
+    </div>
+  </section>
+
+  <!-- ================= SCREEN: DASHBOARD ================= -->
+  <section class="screen" id="screen-dashboard">
+    <div class="topbar">
+      <div class="avatar-name">
+        <div class="avatar" id="dashAvatar">R</div>
+        <div>
+          <div class="username" id="dashName">—</div>
+          <div class="rank-pill" id="dashRank">Rank #—</div>
+        </div>
+      </div>
+      <div class="badge-verified" id="dashBadge" style="display:none;">✓ Verified</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat"><div class="num" id="statStreak">0</div><div class="lbl">Day Streak 🔥</div></div>
+      <div class="stat"><div class="num" id="statTotal">0</div><div class="lbl">Total Days</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Today's Support</div>
+      <p class="muted" style="font-size:13px; margin-bottom:14px;" id="todayStatus">Aaj ka support pending hai.</p>
+      <button class="btn btn-glow" id="supportBtn" onclick="showScreen('screen-support')">⚡ Complete Today's Support</button>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Your Certificate</div>
+      <p class="muted" style="font-size:13px; margin-bottom:14px;">Support complete karne ke baad apna verified certificate unlock karo.</p>
+      <button class="btn btn-outline" id="certBtn" onclick="openCertificate()">🎖️ View / Download Certificate</button>
+    </div>
+
+    <button class="btn btn-ghost" style="font-size:12px;" onclick="showScreen('screen-admin-login')">Admin Panel</button>
+  </section>
+
+  <!-- ================= SCREEN: SUPPORT FLOW ================= -->
+  <section class="screen" id="screen-support">
+    <div class="back-link" onclick="showScreen('screen-dashboard')">← Back to Dashboard</div>
+    <div class="card">
+      <div class="card-label">Support Steps</div>
+      <div class="steps" id="stepsList">
+        <div class="step" data-step="1">
+          <div class="step-num">1</div>
+          <div class="step-text"><b>Open Support Link</b><span>Shortlink ke steps complete karo</span></div>
+        </div>
+        <div class="step" data-step="2">
+          <div class="step-num">2</div>
+          <div class="step-text"><b>Verifying</b><span>Wapas aakar verify karo</span></div>
+        </div>
+        <div class="step" data-step="3">
+          <div class="step-num">3</div>
+          <div class="step-text"><b>Support Complete</b><span>Streak +1, certificate unlock</span></div>
+        </div>
+      </div>
+      <button class="btn btn-glow" id="flowBtn" onclick="advanceFlow()">Start — Open Support Link</button>
+      <p class="footer-note" id="flowHint">Link ek nayi tab me khulega. Steps complete karke wapas is tab par aana.</p>
+    </div>
+  </section>
+
+  <!-- ================= SCREEN: CERTIFICATE ================= -->
+  <section class="screen" id="screen-certificate">
+    <div class="back-link" onclick="showScreen('screen-dashboard')">← Back to Dashboard</div>
+    <canvas id="certCanvas" width="1000" height="640"></canvas>
+    <div class="stack">
+      <button class="btn btn-gold" onclick="downloadCert()">⬇️ Download Certificate</button>
+      <button class="btn btn-glow" onclick="shareToGroup()">📤 Share to Group</button>
+    </div>
+  </section>
+
+  <!-- ================= SCREEN: ADMIN LOGIN ================= -->
+  <section class="screen" id="screen-admin-login">
+    <div class="back-link" onclick="showScreen('screen-hero')">← Back</div>
+    <div class="hero" style="padding-top:6vh;">
+      <div class="logo-badge" style="width:84px;height:84px;"><span style="font-size:30px;">🔐</span></div>
+      <h1 class="brand-title" style="font-size:24px;">Admin Access</h1>
+      <p class="sub">Sirf channel/group ke verified admins hi panel access kar sakte hai.</p>
+    </div>
+    <div class="card">
+      <label>Your Telegram ID</label>
+      <input type="text" id="adminIdInput" placeholder="e.g. 123456789" style="margin-bottom:14px;">
+      <button class="btn btn-glow" onclick="attemptAdminLogin()">Verify & Enter</button>
+      <p class="footer-note" id="adminLoginNote"></p>
+    </div>
+  </section>
+
+  <!-- ================= SCREEN: ADMIN PANEL ================= -->
+  <section class="screen" id="screen-admin-panel">
+    <div class="row-between" style="margin-bottom:18px;">
+      <div class="username">Admin Panel</div>
+      <button class="btn btn-ghost btn-sm" onclick="showScreen('screen-hero')">Exit</button>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat"><div class="num" id="totalSupporters">0</div><div class="lbl">Supporters</div></div>
+      <div class="stat"><div class="num" id="totalAdmins">0</div><div class="lbl">Admins</div></div>
+    </div>
+
+    <div class="card" id="ownerAddAdminCard">
+      <div class="card-label">Add Admin (Owner Only)</div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="newAdminId" placeholder="Telegram ID">
+        <button class="btn btn-outline btn-sm" onclick="addAdmin()">Add</button>
+      </div>
+      <p class="footer-note">Sirf owner naye admins ko panel access de sakta hai.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Channel Logo</div>
+      <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px;">
+        <div class="logo-badge" id="adminLogoPreview" style="width:64px;height:64px;"><span style="font-size:24px;">📺</span></div>
+        <div style="flex:1;">
+          <input type="file" id="logoFileInput" accept="image/*" style="width:100%; font-size:12px; color:var(--muted);">
+        </div>
+      </div>
+      <div class="stack">
+        <button class="btn btn-outline btn-sm" onclick="saveLogo()">Save Logo</button>
+        <button class="btn btn-ghost btn-sm" onclick="resetLogo()">Reset to Default</button>
+      </div>
+      <p class="footer-note">Yeh logo poore support page (hero + certificate) par apply hoga, sabhi users ke liye.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Supporters</div>
+      <div style="max-height:320px; overflow:auto;">
+        <table>
+          <thead><tr><th>Name</th><th>Streak</th><th>Total Days</th><th>Status</th></tr></thead>
+          <tbody id="supportersTable"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============ CONFIG ============ */
+// Set this to your deployed backend URL (see support-backend/README.md) to enable
+// real shortlink verification + real Telegram admin checks.
+// Leave empty string "" to keep using the built-in simulated demo mode.
+const API_BASE_URL = ""; // e.g. "https://your-app.onrender.com"
+
+// Only used when API_BASE_URL is empty (demo mode fallback):
+const SHORTLINK_URL = "https://your-shortlink-provider.com/xxxxx";
+const SHORTLINK_MIN_SECONDS = 15;
+
+/* ============ STATE / STORAGE HELPERS ============ */
+let profile = null;     // {deviceId, name}
+let supporter = null;   // {name, streak, totalDays, lastDate, verifiedToday}
+let flowStep = 0;
+let flowTimer = null;
+
+function uid(){ return 'u_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+// Claude's artifact preview provides window.storage (synced, cross-device).
+// When this page is run standalone (double-clicked, local server, or your
+// own hosting) that API doesn't exist, so we fall back to this device's
+// localStorage — same features, but data only lives on this one browser and
+// won't sync between your PC and your friend's PC. Good enough for local
+// testing; once you deploy properly, connect a real database via the
+// backend instead.
+const hasRealStorage = (typeof window.storage !== 'undefined');
+const localShim = {
+  async get(key, shared){
+    const raw = localStorage.getItem((shared?'shared:':'personal:') + key);
+    return raw ? { key, value: raw, shared } : null;
+  },
+  async set(key, value, shared){
+    localStorage.setItem((shared?'shared:':'personal:') + key, value);
+    return { key, value, shared };
+  },
+  async list(prefix, shared){
+    const p = (shared?'shared:':'personal:') + (prefix||'');
+    const keys = Object.keys(localStorage).filter(k=>k.startsWith(p)).map(k=>k.slice(shared?7:9));
+    return { keys, shared };
+  }
+};
+const storageEngine = hasRealStorage ? window.storage : localShim;
+
+async function sGet(key, shared){
+  try{ const r = await storageEngine.get(key, !!shared); return r ? JSON.parse(r.value) : null; }
+  catch(e){ return null; }
+}
+async function sSet(key, value, shared){
+  try{ await storageEngine.set(key, JSON.stringify(value), !!shared); return true; }
+  catch(e){ console.error('storage set failed', e); return false; }
+}
+async function sList(prefix, shared){
+  try{ const r = await storageEngine.list(prefix, !!shared); return r ? r.keys : []; }
+  catch(e){ return []; }
+}
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  if(id==='screen-dashboard') refreshDashboard();
+  if(id==='screen-admin-panel') refreshAdminPanel();
+}
+
+/* ============ BRANDING (logo) ============ */
+let branding = null; // {logoData: base64 dataURL}
+
+async function loadBranding(){
+  branding = await sGet('branding', true);
+  applyBranding();
+}
+function applyBranding(){
+  const imgHtml = (branding && branding.logoData)
+    ? `<img src="${branding.logoData}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`
+    : `<span>📺</span>`;
+  const hero = document.getElementById('heroLogoBadge');
+  if(hero) hero.innerHTML = imgHtml;
+  const adminPrev = document.getElementById('adminLogoPreview');
+  if(adminPrev) adminPrev.innerHTML = (branding && branding.logoData)
+    ? `<img src="${branding.logoData}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`
+    : `<span style="font-size:24px;">📺</span>`;
+}
+
+function fileToDataURL(file){
+  return new Promise((res, rej)=>{
+    const r = new FileReader();
+    r.onload = ()=> res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+async function saveLogo(){
+  const input = document.getElementById('logoFileInput');
+  if(!input.files || !input.files[0]){ toast('Pehle image choose karo'); return; }
+  const file = input.files[0];
+  if(file.size > 900*1024){ toast('Image 900KB se choti rakho'); return; }
+  const dataUrl = await fileToDataURL(file);
+  branding = { logoData: dataUrl };
+  const ok = await sSet('branding', branding, true);
+  if(ok){ toast('Logo update ho gaya ✅'); applyBranding(); }
+  else{ toast('Save fail ho gaya, chhoti image try karo'); }
+}
+
+async function resetLogo(){
+  branding = { logoData: null };
+  await sSet('branding', branding, true);
+  applyBranding();
+  toast('Default logo restore ho gaya');
+}
+
+/* ============ BOOT ============ */
+async function init(){
+  await loadBranding();
+  profile = await sGet('profile', false);
+  if(profile && profile.deviceId){
+    supporter = await sGet('supporter:' + profile.deviceId, true);
+    if(!supporter){
+      supporter = { name: profile.name, streak:0, totalDays:0, lastDate:null };
+      await sSet('supporter:' + profile.deviceId, supporter, true);
+    }
+  }
+}
+init();
+
+function goWelcome(){
+  if(profile && profile.name){
+    showScreen('screen-dashboard');
+  } else {
+    showScreen('screen-name');
+  }
+}
+
+async function saveName(){
+  const val = document.getElementById('nameInput').value.trim();
+  if(!val){ toast('Naam daalna zaroori hai'); return; }
+  const deviceId = uid();
+  profile = { deviceId, name: val };
+  await sSet('profile', profile, false);
+  supporter = { name: val, streak:0, totalDays:0, lastDate:null };
+  await sSet('supporter:' + deviceId, supporter, true);
+  toast('Welcome, ' + val + '! 🎉');
+  showScreen('screen-dashboard');
+}
+
+/* ============ DASHBOARD ============ */
+async function refreshDashboard(){
+  if(!profile) { showScreen('screen-hero'); return; }
+  supporter = await sGet('supporter:' + profile.deviceId, true) || supporter;
+
+  document.getElementById('dashName').textContent = profile.name;
+  document.getElementById('dashAvatar').textContent = profile.name.charAt(0).toUpperCase();
+  document.getElementById('statStreak').textContent = supporter.streak || 0;
+  document.getElementById('statTotal').textContent = supporter.totalDays || 0;
+
+  const doneToday = supporter.lastDate === todayStr();
+  document.getElementById('todayStatus').textContent = doneToday
+    ? "Aaj ka support complete ho chuka hai ✅ Kal wapas aana."
+    : "Aaj ka support pending hai.";
+  document.getElementById('supportBtn').disabled = doneToday;
+  document.getElementById('supportBtn').textContent = doneToday ? '✅ Today Done' : '⚡ Complete Today\'s Support';
+  document.getElementById('dashBadge').style.display = (supporter.totalDays>0) ? 'inline-flex' : 'none';
+  document.getElementById('certBtn').disabled = supporter.totalDays===0;
+
+  // rank
+  const keys = await sList('supporter:', true);
+  let all = [];
+  for(const k of keys){ const v = await sGet(k, true); if(v) all.push(v); }
+  all.sort((a,b)=> (b.totalDays||0) - (a.totalDays||0));
+  const myIndex = all.findIndex(s => s.name===supporter.name && s.streak===supporter.streak && s.totalDays===supporter.totalDays);
+  document.getElementById('dashRank').textContent = 'Rank #' + (myIndex>=0? myIndex+1 : all.length) + ' of ' + all.length;
+}
+
+/* ============ SUPPORT FLOW ============ */
+function resetFlowUI(){
+  flowStep = 0;
+  if(flowTimer) clearInterval(flowTimer);
+  document.querySelectorAll('#stepsList .step').forEach(s=>s.classList.remove('done'));
+  const btn = document.getElementById('flowBtn');
+  btn.textContent = 'Start — Open Support Link';
+  btn.disabled = false;
+  btn.onclick = advanceFlow;
+  document.getElementById('flowHint').textContent = 'Link ek nayi tab me khulega. Steps complete karke wapas is tab par aana.';
+}
+document.getElementById('screen-support').addEventListener('transitionend', ()=>{});
+
+async function advanceFlow(){
+  if(flowStep!==0) return;
+  flowStep = 1;
+  document.querySelector('.step[data-step="1"]').classList.add('done');
+  document.getElementById('flowBtn').disabled = true;
+
+  if(API_BASE_URL){
+    // ---- REAL MODE: ask backend for a signed, single-use shortlink ----
+    document.getElementById('flowBtn').textContent = 'Preparing link…';
+    try{
+      const r = await fetch(API_BASE_URL + '/api/support/start', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ deviceId: profile.deviceId })
+      });
+      const data = await r.json();
+      window.open(data.shortlink, '_blank');
+      document.getElementById('flowBtn').textContent = 'Waiting for verification…';
+      document.getElementById('flowHint').textContent = 'Steps complete karne ke baad yeh page apne aap detect kar lega.';
+      pollBackendStatus(data.sessionId);
+    }catch(e){
+      toast('Backend se connect nahi ho paya');
+      resetFlowUI();
+    }
+  } else {
+    // ---- DEMO MODE: simulated timer, no real verification ----
+    window.open(SHORTLINK_URL, '_blank');
+    document.getElementById('flowBtn').textContent = 'Verifying… please wait';
+    document.getElementById('flowHint').textContent = 'Steps complete karke ' + SHORTLINK_MIN_SECONDS + ' second baad verify enable hoga.';
+    let secs = SHORTLINK_MIN_SECONDS;
+    flowTimer = setInterval(()=>{
+      secs--;
+      if(secs<=0){
+        clearInterval(flowTimer);
+        document.querySelector('.step[data-step="2"]').classList.add('done');
+        flowStep = 2;
+        document.getElementById('flowBtn').textContent = "I've Completed It — Verify ✅";
+        document.getElementById('flowBtn').disabled = false;
+        document.getElementById('flowHint').textContent = 'Verify dabao support complete karne ke liye.';
+        document.getElementById('flowBtn').onclick = completeSupport;
+      } else {
+        document.getElementById('flowBtn').textContent = 'Verifying… (' + secs + 's)';
+      }
+    }, 1000);
+  }
+}
+
+function pollBackendStatus(sessionId){
+  flowTimer = setInterval(async ()=>{
+    try{
+      const r = await fetch(API_BASE_URL + '/api/support/status?sessionId=' + sessionId);
+      const data = await r.json();
+      if(data.verified){
+        clearInterval(flowTimer);
+        document.querySelector('.step[data-step="2"]').classList.add('done');
+        flowStep = 2;
+        completeSupport();
+      }
+    }catch(e){ /* keep polling */ }
+  }, 3000);
+}
+
+async function completeSupport(){
+  document.querySelector('.step[data-step="3"]').classList.add('done');
+  const today = todayStr();
+  const yest = new Date(Date.now()-86400000).toISOString().slice(0,10);
+  if(supporter.lastDate === yest){ supporter.streak = (supporter.streak||0) + 1; }
+  else if(supporter.lastDate !== today){ supporter.streak = 1; }
+  supporter.totalDays = (supporter.totalDays||0) + (supporter.lastDate===today ? 0 : 1);
+  supporter.lastDate = today;
+  await sSet('supporter:' + profile.deviceId, supporter, true);
+  toast('Support complete! Streak: ' + supporter.streak + ' 🔥');
+  document.getElementById('flowBtn').textContent = 'Done ✓';
+  document.getElementById('flowBtn').disabled = true;
+  setTimeout(()=>{ resetFlowUI(); showScreen('screen-dashboard'); }, 1200);
+}
+
+/* ============ CERTIFICATE ============ */
+function openCertificate(){
+  if(!supporter || supporter.totalDays===0){ toast('Pehle ek support complete karo'); return; }
+  showScreen('screen-certificate');
+  drawCertificate();
+}
+
+function drawCertificate(){
+  const c = document.getElementById('certCanvas');
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0,0,c.width,c.height);
+  g.addColorStop(0,'#0a0512'); g.addColorStop(1,'#170a26');
+  ctx.fillStyle = g; ctx.fillRect(0,0,c.width,c.height);
+
+  // border glow
+  const bg = ctx.createLinearGradient(0,0,c.width,c.height);
+  bg.addColorStop(0,'#8b2fd1'); bg.addColorStop(.5,'#ff2e9a'); bg.addColorStop(1,'#ffd23f');
+  ctx.strokeStyle = bg; ctx.lineWidth = 8; ctx.strokeRect(20,20,c.width-40,c.height-40);
+  ctx.strokeStyle = '#ffffff33'; ctx.lineWidth = 1; ctx.strokeRect(36,36,c.width-72,c.height-72);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = '700 16px Inter, sans-serif';
+  ctx.fillText('★ CHANNEL SUPPORT CENTER ★', c.width/2, 110);
+
+  ctx.font = '900 42px Orbitron, sans-serif';
+  const tg = ctx.createLinearGradient(c.width*0.2,0,c.width*0.8,0);
+  tg.addColorStop(0,'#8b2fd1'); tg.addColorStop(.5,'#ff2e9a'); tg.addColorStop(1,'#ff8a1e');
+  ctx.fillStyle = tg;
+  ctx.fillText('CERTIFICATE', c.width/2, 175);
+  ctx.font = '700 16px Inter, sans-serif';
+  ctx.fillStyle = '#a89ec2';
+  ctx.fillText('OF VERIFIED SUPPORT', c.width/2, 202);
+
+  ctx.font = '600 15px Inter, sans-serif';
+  ctx.fillStyle = '#a89ec2';
+  ctx.fillText('This certifies that', c.width/2, 270);
+
+  ctx.font = '800 46px Inter, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = '#ff2e9a99'; ctx.shadowBlur = 20;
+  ctx.fillText(supporter.name, c.width/2, 330);
+  ctx.shadowBlur = 0;
+
+  ctx.font = '500 16px Inter, sans-serif';
+  ctx.fillStyle = '#a89ec2';
+  ctx.fillText('has proudly supported the channel for', c.width/2, 375);
+
+  ctx.font = '900 34px Orbitron, sans-serif';
+  ctx.fillStyle = '#ffd23f';
+  ctx.fillText(supporter.totalDays + ' DAYS  •  ' + supporter.streak + ' DAY STREAK', c.width/2, 425);
+
+  ctx.font = '500 13px Inter, sans-serif';
+  ctx.fillStyle = '#a89ec2';
+  ctx.fillText('Issued on ' + new Date().toLocaleDateString('en-IN', {day:'numeric', month:'long', year:'numeric'}), c.width/2, 490);
+
+  ctx.font = '700 13px Inter, sans-serif';
+  ctx.fillStyle = '#3ddc84';
+  ctx.fillText('✓ VERIFIED SUPPORTER', c.width/2, 540);
+
+  ctx.font = '600 11px Inter, sans-serif';
+  ctx.fillStyle = '#6b5f88';
+  ctx.fillText('1st Anniversary Special Edition', c.width/2, 590);
+}
+
+function downloadCert(){
+  const c = document.getElementById('certCanvas');
+  const link = document.createElement('a');
+  link.download = 'support-certificate-' + supporter.name.replace(/\s+/g,'_') + '.png';
+  link.href = c.toDataURL('image/png');
+  link.click();
+}
+
+function shareToGroup(){
+  const text = encodeURIComponent('🎖️ Maine channel ko ' + supporter.totalDays + ' din support kiya! ' + supporter.streak + ' day streak 🔥 #ChannelSupport');
+  window.open('https://t.me/share/url?url=&text=' + text, '_blank');
+}
+
+/* ============ ADMIN ============ */
+async function attemptAdminLogin(){
+  const id = document.getElementById('adminIdInput').value.trim();
+  if(!id){ toast('Telegram ID daalo'); return; }
+
+  if(API_BASE_URL){
+    // ---- REAL MODE: ask backend to check actual Telegram admin status ----
+    document.getElementById('adminLoginNote').textContent = 'Verifying with Telegram…';
+    try{
+      const r = await fetch(API_BASE_URL + '/api/admin/verify', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ telegramId: id })
+      });
+      const data = await r.json();
+      if(!data.isAdmin){
+        document.getElementById('adminLoginNote').textContent = 'Yeh ID channel/group ka admin nahi hai.';
+        toast('Access denied');
+        return;
+      }
+      await grantAdminAccess(id, data.isOwner);
+    }catch(e){
+      document.getElementById('adminLoginNote').textContent = 'Backend se connect nahi ho paya.';
+    }
+  } else {
+    // ---- DEMO MODE: first login becomes owner, no real Telegram check ----
+    await grantAdminAccess(id, null);
+  }
+}
+
+async function grantAdminAccess(id, verifiedOwner){
+  let admins = await sGet('admins', true);
+  if(!admins){
+    // first person becomes owner (in real mode, only if Telegram confirms creator status)
+    if(API_BASE_URL && verifiedOwner===false){
+      document.getElementById('adminLoginNote').textContent = 'Panel abhi tak set nahi hui — pehle owner (channel creator) ko login karna hoga.';
+      toast('Access denied');
+      return;
+    }
+    admins = { ownerId: id, adminIds: [id] };
+    await sSet('admins', admins, true);
+    toast('Aap owner set ho gaye ✅');
+    localStorage.setItem('_currentAdminId', id);
+    showScreen('screen-admin-panel');
+    return;
+  }
+  if(admins.adminIds.includes(id)){
+    localStorage.setItem('_currentAdminId', id);
+    showScreen('screen-admin-panel');
+  } else {
+    document.getElementById('adminLoginNote').textContent = 'Aap channel admin ho, lekin is panel ki list me nahi ho. Owner se add karwao.';
+    toast('Access denied');
+  }
+}
+
+async function refreshAdminPanel(){
+  const admins = await sGet('admins', true) || {ownerId:null, adminIds:[]};
+  const myId = localStorage.getItem('_currentAdminId') || admins.ownerId;
+  document.getElementById('ownerAddAdminCard').style.display = (myId === admins.ownerId) ? 'block' : 'none';
+  document.getElementById('totalAdmins').textContent = admins.adminIds.length;
+
+  const keys = await sList('supporter:', true);
+  let rows = '';
+  let count = 0;
+  for(const k of keys){
+    const v = await sGet(k, true);
+    if(!v) continue;
+    count++;
+    const status = v.lastDate === todayStr() ? '<span style="color:#3ddc84">Active Today</span>' : '<span class="muted">Idle</span>';
+    rows += `<tr><td>${v.name}</td><td>${v.streak||0}🔥</td><td>${v.totalDays||0}</td><td>${status}</td></tr>`;
+  }
+  document.getElementById('totalSupporters').textContent = count;
+  document.getElementById('supportersTable').innerHTML = rows || '<tr><td colspan="4" class="muted">Koi supporter nahi mila.</td></tr>';
+}
+
+async function addAdmin(){
+  const newId = document.getElementById('newAdminId').value.trim();
+  if(!newId){ toast('ID daalo'); return; }
+  let admins = await sGet('admins', true);
+  if(!admins.adminIds.includes(newId)){
+    admins.adminIds.push(newId);
+    await sSet('admins', admins, true);
+    toast('Admin added ✅');
+    document.getElementById('newAdminId').value = '';
+    refreshAdminPanel();
+  } else {
+    toast('Already an admin');
+  }
+}
+</script>
+</body>
+</html>

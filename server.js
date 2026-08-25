@@ -153,4 +153,72 @@ app.post('/api/admin/verify', async (req, res) => {
 
 app.get('/', (req, res) => res.send('Channel Support backend is running.'));
 
+// ---------------------------------------------------------------------------
+// 5) TELEGRAM LOGIN WIDGET — verifies the signed payload the widget sends
+//    after a user taps "Allow" in Telegram, then checks real admin status.
+//    Docs: https://core.telegram.org/widgets/login
+// ---------------------------------------------------------------------------
+function verifyTelegramWidgetAuth(payload) {
+  const { hash, ...rest } = payload;
+  if (!hash) return false;
+  const dataCheckString = Object.keys(rest)
+    .sort()
+    .map((k) => `${k}=${rest[k]}`)
+    .join('\n');
+  const secretKey = crypto.createHash('sha256').update(process.env.TELEGRAM_BOT_TOKEN).digest();
+  const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+  const a = Buffer.from(computedHash);
+  const b = Buffer.from(hash);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+app.post('/api/admin/telegram-auth', async (req, res) => {
+  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
+    return res.status(500).json({ verified: false, error: 'Bot token / chat id not configured on server' });
+  }
+  const payload = req.body || {};
+  if (!payload.id || !payload.hash) {
+    return res.status(400).json({ verified: false, error: 'Invalid Telegram payload' });
+  }
+
+  const isValid = verifyTelegramWidgetAuth(payload);
+  if (!isValid) {
+    return res.status(400).json({ verified: false, error: 'Signature check failed' });
+  }
+
+  // Reject stale login attempts (older than 1 day)
+  const ageSeconds = Math.floor(Date.now() / 1000) - Number(payload.auth_date || 0);
+  if (ageSeconds > 86400) {
+    return res.status(400).json({ verified: false, error: 'Login expired, please try again' });
+  }
+
+  try {
+    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(process.env.TELEGRAM_CHAT_ID)}&user_id=${encodeURIComponent(payload.id)}`;
+    const r = await fetch(url);
+    const data = await r.json();
+    if (!data.ok) {
+      return res.json({ verified: true, isAdmin: false, error: data.description || 'Telegram API error' });
+    }
+    const status = data.result.status;
+    const isAdmin = status === 'creator' || status === 'administrator';
+    const name = [payload.first_name, payload.last_name].filter(Boolean).join(' ');
+
+    res.json({
+      verified: true,
+      isAdmin,
+      isOwner: status === 'creator',
+      profile: {
+        id: payload.id,
+        name: name || payload.username || ('User ' + payload.id),
+        username: payload.username || '',
+        photoUrl: payload.photo_url || ''
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ verified: false, error: 'Server error contacting Telegram' });
+  }
+});
+
 app.listen(PORT, () => console.log(`Support backend listening on port ${PORT}`));

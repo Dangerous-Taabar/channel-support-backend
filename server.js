@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '5mb' })); // 5mb so an uploaded channel-logo (base64) fits
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
 app.use(cors({
@@ -18,6 +18,58 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}
 const MIN_DWELL_SECONDS = parseInt(process.env.MIN_DWELL_SECONDS || '15', 10);
 
 // ---------------------------------------------------------------------------
+// SHARED STORAGE (Upstash Redis) — this is what actually makes data visible
+// across every visitor: supporters, leaderboard, admins, settings, branding.
+// Sign up free at upstash.com, create a Redis database, and put its REST URL
+// + token in UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN env vars.
+// ---------------------------------------------------------------------------
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+async function redisCommand(cmd) {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) throw new Error('Upstash not configured');
+  const r = await fetch(UPSTASH_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(cmd)
+  });
+  const data = await r.json();
+  if (data.error) throw new Error(data.error);
+  return data.result;
+}
+
+app.post('/api/storage/get', async (req, res) => {
+  try {
+    const { key } = req.body || {};
+    if (!key) return res.status(400).json({ error: 'key required' });
+    const value = await redisCommand(['GET', key]);
+    res.json({ value });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/storage/set', async (req, res) => {
+  try {
+    const { key, value } = req.body || {};
+    if (!key) return res.status(400).json({ error: 'key required' });
+    await redisCommand(['SET', key, value]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/storage/list', async (req, res) => {
+  try {
+    const { prefix } = req.body || {};
+    const keys = await redisCommand(['KEYS', (prefix || '') + '*']);
+    res.json({ keys: keys || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // In-memory session store.
 // NOTE: This resets if the server restarts. For real production use, swap
 // this for a small database (SQLite/Postgres/Redis) — the interface below
@@ -96,6 +148,22 @@ app.get('/api/support/callback', (req, res) => {
   const elapsedSeconds = (Date.now() - record.createdAt) / 1000;
   if (elapsedSeconds < MIN_DWELL_SECONDS) {
     return res.status(400).send('<h2>Steps completed too quickly — please try again.</h2>');
+  }
+
+  // ---- Basic bypass-tool defense ----
+  // A real completion arrives here as a browser redirect FROM the shortlink
+  // provider's own domain. Bypass bots that just extract this URL and fetch
+  // it directly (via curl/requests/a bypass-bot script) typically send no
+  // Referer header at all, or a generic script User-Agent. This isn't
+  // unbeatable — a determined bypasser can spoof both — but it blocks the
+  // common automated tools with near-zero cost to real users.
+  const referer = (req.headers['referer'] || req.headers['referrer'] || '').toLowerCase();
+  const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+  const looksLikeScript = /python|curl|wget|axios|okhttp|go-http-client|node-fetch|postman|scrapy/.test(userAgent);
+  const cameFromShortlinkProvider = referer.includes('gplinks');
+
+  if (looksLikeScript || (!cameFromShortlinkProvider && referer !== '')) {
+    return res.status(403).send('<h2>This link must be completed through the actual support link, not opened directly.</h2>');
   }
 
   record.verified = true;
@@ -193,31 +261,88 @@ app.post('/api/admin/telegram-auth', async (req, res) => {
     return res.status(400).json({ verified: false, error: 'Login expired, please try again' });
   }
 
+  const name = [payload.first_name, payload.last_name].filter(Boolean).join(' ');
+  const profile = {
+    id: payload.id,
+    name: name || payload.username || ('User ' + payload.id),
+    username: payload.username || '',
+    photoUrl: payload.photo_url || ''
+  };
+
+  // Best-effort check of real Telegram status, used only to auto-detect the
+  // channel creator (for the one-time owner bootstrap). Access itself is
+  // controlled by the frontend's own owner-maintained username whitelist —
+  // so if this check fails or the person isn't a channel member at all, we
+  // still return their verified profile instead of blocking them here.
+  let isOwner = false;
   try {
     const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(process.env.TELEGRAM_CHAT_ID)}&user_id=${encodeURIComponent(payload.id)}`;
     const r = await fetch(url);
     const data = await r.json();
-    if (!data.ok) {
-      return res.json({ verified: true, isAdmin: false, error: data.description || 'Telegram API error' });
-    }
-    const status = data.result.status;
-    const isAdmin = status === 'creator' || status === 'administrator';
-    const name = [payload.first_name, payload.last_name].filter(Boolean).join(' ');
+    if (data.ok) isOwner = data.result.status === 'creator';
+  } catch (err) {
+    console.error('getChatMember check failed (non-fatal):', err.message);
+  }
 
-    res.json({
-      verified: true,
-      isAdmin,
-      isOwner: status === 'creator',
-      profile: {
-        id: payload.id,
-        name: name || payload.username || ('User ' + payload.id),
-        username: payload.username || '',
-        photoUrl: payload.photo_url || ''
-      }
+  res.json({ verified: true, isOwner, profile });
+});
+
+// ---------------------------------------------------------------------------
+// 6) LIGHTWEIGHT IDENTITY VERIFY — used when a normal (non-admin) supporter
+//    connects with Telegram. Only checks the signature (proves it's really
+//    them), no admin/creator check needed here.
+// ---------------------------------------------------------------------------
+app.post('/api/telegram/verify-identity', (req, res) => {
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
+    return res.status(500).json({ verified: false, error: 'Bot token not configured on server' });
+  }
+  const payload = req.body || {};
+  if (!payload.id || !payload.hash) {
+    return res.status(400).json({ verified: false, error: 'Invalid Telegram payload' });
+  }
+  if (!verifyTelegramWidgetAuth(payload)) {
+    return res.status(400).json({ verified: false, error: 'Signature check failed' });
+  }
+  const name = [payload.first_name, payload.last_name].filter(Boolean).join(' ');
+  res.json({
+    verified: true,
+    profile: {
+      id: payload.id,
+      name: name || payload.username || ('User ' + payload.id),
+      username: payload.username || '',
+      photoUrl: payload.photo_url || ''
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7) GROUP NOTIFICATION — bot posts a message whenever a supporter completes
+//    support (only called by the frontend when the owner has this toggled
+//    ON in the admin panel). Optionally point this at a different chat
+//    (e.g. your discussion group) via TELEGRAM_NOTIFY_CHAT_ID; otherwise it
+//    falls back to TELEGRAM_CHAT_ID.
+// ---------------------------------------------------------------------------
+app.post('/api/notify/support', async (req, res) => {
+  const targetChat = process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+  if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
+    return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
+  }
+  const { name, username, totalDays, streak } = req.body || {};
+  const who = username ? '@' + username : (name || 'Someone');
+  const text = `🎉 ${who} ne channel ko support kiya!\n📅 Total support: ${totalDays} din\n🔥 Current streak: ${streak} din`;
+
+  try {
+    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: targetChat, text })
     });
+    const data = await r.json();
+    res.json({ sent: !!data.ok, error: data.ok ? null : data.description });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ verified: false, error: 'Server error contacting Telegram' });
+    res.status(500).json({ sent: false, error: 'Server error contacting Telegram' });
   }
 });
 

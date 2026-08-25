@@ -152,18 +152,24 @@ app.get('/api/support/callback', (req, res) => {
 
   // ---- Basic bypass-tool defense ----
   // A real completion arrives here as a browser redirect FROM the shortlink
-  // provider's own domain. Bypass bots that just extract this URL and fetch
-  // it directly (via curl/requests/a bypass-bot script) typically send no
-  // Referer header at all, or a generic script User-Agent. This isn't
-  // unbeatable — a determined bypasser can spoof both — but it blocks the
-  // common automated tools with near-zero cost to real users.
+  // provider's own domain — so the Referer header must be present AND point
+  // to GPLinks. Anyone who opens this link directly (pasted, new tab, curl,
+  // bypass-bot) sends no Referer at all, or the wrong one — both are
+  // blocked. Note: a small number of privacy-hardened browsers strip
+  // Referer even on legitimate navigation, which would false-positive a
+  // real supporter — an accepted trade-off for real bypass protection.
   const referer = (req.headers['referer'] || req.headers['referrer'] || '').toLowerCase();
   const userAgent = (req.headers['user-agent'] || '').toLowerCase();
   const looksLikeScript = /python|curl|wget|axios|okhttp|go-http-client|node-fetch|postman|scrapy/.test(userAgent);
   const cameFromShortlinkProvider = referer.includes('gplinks');
 
-  if (looksLikeScript || (!cameFromShortlinkProvider && referer !== '')) {
-    return res.status(403).send('<h2>This link must be completed through the actual support link, not opened directly.</h2>');
+  if (looksLikeScript || !cameFromShortlinkProvider) {
+    return res.status(404).send(`
+      <html><body style="background:#08050f;color:#fff;font-family:sans-serif;text-align:center;padding-top:60px;">
+        <h2>404 — Not Found</h2>
+        <p>Steps complete karke hi is link tak pahunch sakte ho.<br>Seedha yeh link kholna allowed nahi hai — bahut jaldi aa gaye ho 😉</p>
+      </body></html>
+    `);
   }
 
   record.verified = true;

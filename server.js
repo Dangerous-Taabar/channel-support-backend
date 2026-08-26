@@ -70,12 +70,16 @@ app.post('/api/storage/list', async (req, res) => {
   }
 });
 
-// In-memory session store.
-// NOTE: This resets if the server restarts. For real production use, swap
-// this for a small database (SQLite/Postgres/Redis) — the interface below
-// (get/set/delete) is the only thing you'd need to change.
+// Session store — persisted in Redis (Upstash) so it survives server
+// restarts/redeploys, and works even if Render spins up a new instance.
 // ---------------------------------------------------------------------------
-const sessions = new Map(); // sessionId -> { deviceId, createdAt, verified, verifiedAt }
+async function sessionGet(id) {
+  const raw = await redisCommand(['GET', 'session:' + id]);
+  return raw ? JSON.parse(raw) : null;
+}
+async function sessionSet(id, record) {
+  await redisCommand(['SET', 'session:' + id, JSON.stringify(record)]);
+}
 
 function signToken(sessionId) {
   const hmac = crypto.createHmac('sha256', SESSION_SECRET);
@@ -109,7 +113,7 @@ app.post('/api/support/start', async (req, res) => {
 
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = signToken(sessionId);
-  sessions.set(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null });
+  await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false });
 
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
 
@@ -135,11 +139,13 @@ app.post('/api/support/start', async (req, res) => {
 // 2) CALLBACK — this is the URL the shortlink redirects to once the user has
 //    completed all of the provider's steps. We verify the signature (proves
 //    it wasn't tampered with) and enforce a minimum dwell time (proves the
-//    user didn't jump straight here).
+//    user didn't jump straight here). On success, it redirects the browser
+//    straight back into your live site (FRONTEND_URL) with ?verified=1 so
+//    the same tab picks up the completion — no cross-tab polling needed.
 // ---------------------------------------------------------------------------
-app.get('/api/support/callback', (req, res) => {
+app.get('/api/support/callback', async (req, res) => {
   const { session, token } = req.query;
-  const record = sessions.get(session);
+  const record = await sessionGet(session);
 
   if (!record || !verifyTokenSignature(session, token)) {
     return res.status(400).send('<h2>Invalid or expired support link.</h2>');
@@ -174,9 +180,20 @@ app.get('/api/support/callback', (req, res) => {
 
   record.verified = true;
   record.verifiedAt = Date.now();
-  sessions.set(session, record);
+  await sessionSet(session, record);
 
-  // Redirect back into your frontend. Adjust this URL to your deployed page.
+  if (process.env.FRONTEND_URL) {
+    const redirectUrl = `${process.env.FRONTEND_URL.replace(/\/$/, '')}/?verified=1&session=${session}`;
+    return res.send(`
+      <html><head><meta http-equiv="refresh" content="0;url=${redirectUrl}"></head>
+      <body style="background:#08050f;color:#fff;font-family:sans-serif;text-align:center;padding-top:60px;">
+        <h2>✅ Support verified!</h2>
+        <p>Redirecting you back…</p>
+        <script>window.location.href = ${JSON.stringify(redirectUrl)};</script>
+      </body></html>
+    `);
+  }
+
   res.send(`
     <html><body style="background:#08050f;color:#fff;font-family:sans-serif;text-align:center;padding-top:60px;">
       <h2>✅ Support verified!</h2>
@@ -186,14 +203,29 @@ app.get('/api/support/callback', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// 3) STATUS — frontend polls this after opening the shortlink to know when
-//    the callback above has fired.
+// 3) STATUS — quick peek at a session's verified state (used as a fallback).
 // ---------------------------------------------------------------------------
-app.get('/api/support/status', (req, res) => {
+app.get('/api/support/status', async (req, res) => {
   const { sessionId } = req.query;
-  const record = sessions.get(sessionId);
+  const record = await sessionGet(sessionId);
   if (!record) return res.status(404).json({ verified: false });
   res.json({ verified: !!record.verified });
+});
+
+// ---------------------------------------------------------------------------
+// 3b) CONSUME — the frontend calls this exactly once after detecting
+//     ?verified=1 in the URL. It only returns ok:true the FIRST time for a
+//     given session, then marks it consumed — so someone can't replay a
+//     saved verified-callback URL to farm streaks/credit repeatedly.
+// ---------------------------------------------------------------------------
+app.post('/api/support/consume', async (req, res) => {
+  const { sessionId } = req.body || {};
+  const record = await sessionGet(sessionId);
+  if (!record || !record.verified) return res.json({ ok: false, error: 'Not verified' });
+  if (record.consumed) return res.json({ ok: false, error: 'Already used' });
+  record.consumed = true;
+  await sessionSet(sessionId, record);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

@@ -366,24 +366,31 @@ app.post('/api/notify/support', async (req, res) => {
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
-  const { name, username, totalDays, streak } = req.body || {};
+  const { name, username, totalDays, streak, certImage } = req.body || {};
   const who = username ? '@' + username : (name || 'Someone');
   const caption = `🎉 ${who} ne channel ko support kiya!\n📅 Total support: ${totalDays} din\n🔥 Current streak: ${streak} din\n\n👇 Tum bhi support karo:`;
   const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
   const replyMarkup = { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] };
 
   try {
-    // Try to attach the channel logo (uploaded by the admin) as the photo.
+    // Prefer the supporter's actual certificate image (sent by the frontend
+    // right after they complete support). Fall back to the channel logo,
+    // then to a plain text message, if that's ever unavailable.
     let imageBuffer = null;
-    try {
-      const brandingRaw = await redisCommand(['GET', 'branding']);
-      if (brandingRaw) {
-        const branding = JSON.parse(brandingRaw);
-        if (branding.logoData && branding.logoData.includes(',')) {
-          imageBuffer = Buffer.from(branding.logoData.split(',')[1], 'base64');
+    if (certImage && certImage.includes(',')) {
+      try { imageBuffer = Buffer.from(certImage.split(',')[1], 'base64'); } catch (e) { /* ignore, fall through */ }
+    }
+    if (!imageBuffer) {
+      try {
+        const brandingRaw = await redisCommand(['GET', 'branding']);
+        if (brandingRaw) {
+          const branding = JSON.parse(brandingRaw);
+          if (branding.logoData && branding.logoData.includes(',')) {
+            imageBuffer = Buffer.from(branding.logoData.split(',')[1], 'base64');
+          }
         }
-      }
-    } catch (e) { /* no logo set yet — fall back to text-only below */ }
+      } catch (e) { /* no logo set yet — fall back to text-only below */ }
+    }
 
     let data;
     if (imageBuffer) {

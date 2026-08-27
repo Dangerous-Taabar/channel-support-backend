@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const fetch = require('node-fetch');
+const FormData = require('form-data');
 
 const app = express();
 app.use(express.json({ limit: '5mb' })); // 5mb so an uploaded channel-logo (base64) fits
@@ -367,16 +368,43 @@ app.post('/api/notify/support', async (req, res) => {
   }
   const { name, username, totalDays, streak } = req.body || {};
   const who = username ? '@' + username : (name || 'Someone');
-  const text = `🎉 ${who} ne channel ko support kiya!\n📅 Total support: ${totalDays} din\n🔥 Current streak: ${streak} din`;
+  const caption = `🎉 ${who} ne channel ko support kiya!\n📅 Total support: ${totalDays} din\n🔥 Current streak: ${streak} din\n\n👇 Tum bhi support karo:`;
+  const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+  const replyMarkup = { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] };
 
   try {
-    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: targetChat, text })
-    });
-    const data = await r.json();
+    // Try to attach the channel logo (uploaded by the admin) as the photo.
+    let imageBuffer = null;
+    try {
+      const brandingRaw = await redisCommand(['GET', 'branding']);
+      if (brandingRaw) {
+        const branding = JSON.parse(brandingRaw);
+        if (branding.logoData && branding.logoData.includes(',')) {
+          imageBuffer = Buffer.from(branding.logoData.split(',')[1], 'base64');
+        }
+      }
+    } catch (e) { /* no logo set yet — fall back to text-only below */ }
+
+    let data;
+    if (imageBuffer) {
+      const form = new FormData();
+      form.append('chat_id', targetChat);
+      form.append('caption', caption);
+      form.append('reply_markup', JSON.stringify(replyMarkup));
+      form.append('photo', imageBuffer, { filename: 'support.png', contentType: 'image/png' });
+      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+        method: 'POST',
+        body: form
+      });
+      data = await r.json();
+    } else {
+      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: targetChat, text: caption, reply_markup: replyMarkup })
+      });
+      data = await r.json();
+    }
     res.json({ sent: !!data.ok, error: data.ok ? null : data.description });
   } catch (err) {
     console.error(err);

@@ -334,6 +334,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
       if (!supporter || !supporter.totalDays) {
         const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+        const tag = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
         try {
           // Reply first (so the joke references their message)...
           await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -342,7 +343,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
             body: JSON.stringify({
               chat_id: msg.chat.id,
               reply_to_message_id: msg.message_id,
-              text: `😄 ${joke}\n\nPehle support karo, phir yahan baat kar sakte ho! 👇`,
+              text: `${tag} 😄 ${joke}\n\nPehle support karo, phir yahan baat kar sakte ho! 👇`,
               reply_markup: { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] }
             })
           });
@@ -540,6 +541,17 @@ app.post('/api/notify/support', async (req, res) => {
           chat_id: process.env.COMMUNITY_CHAT_ID,
           text: `✅ ${mention}, ab tum message kar sakte ho! Support karne ke liye shukriya 🙌`
         })
+      }).then(r => r.json()).then(data => {
+        // Auto-delete this unlock announcement after 2 minutes so the chat stays clean.
+        if (data && data.ok && data.result && data.result.message_id) {
+          setTimeout(() => {
+            fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: process.env.COMMUNITY_CHAT_ID, message_id: data.result.message_id })
+            }).catch(() => {});
+          }, 2 * 60 * 1000);
+        }
       }).catch(() => {});
     }
   } catch (err) {

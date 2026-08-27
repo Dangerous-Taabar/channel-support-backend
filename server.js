@@ -258,6 +258,122 @@ app.post('/api/admin/verify', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// TELEGRAM WEBHOOK — handles incoming DMs to the bot. When someone messages
+// the bot privately (e.g. /start), it checks whether they've ever supported
+// (via their stable supporter:tg_<id> record) and nudges them with a joke +
+// a Support Now button if not, or thanks them with their stats if they have.
+// One-time setup after each deploy: visit GET /api/telegram/setup-webhook.
+// ---------------------------------------------------------------------------
+const NUDGE_JOKES = [
+  "Bhai itni mehnat toh tu reels scroll karne me kar leta hai 😄 yeh toh sirf 3 minute ka kaam hai!",
+  "Free me itna premium content chahiye aur 3 minute nahi de sakta? 😂 Chal, ho jaa shuru!",
+  "Tera thumb itna busy rehta hai scrolling me, 3 min isko bhi de de yaar 🙏",
+  "Itna toh tu load hone ka wait karne me time de deta hai bhai 😅 3 min lagayega toh kya chala jayega?",
+  "Support karne me itni sharam kaisi — WiFi password maangne me toh nahi aati 😄",
+  "Tu itna type kar raha hai bina support kiye — dil toota mera 💔 3 min de de yaar",
+  "Bina support kiye baat karna? Bhai yeh toh 'bina ticket movie dekhna' wali baat ho gayi 🎬😂",
+  "Chal jhooti mohabbat chhod, asli support kar 3 minute me 💪",
+  "Group me sab kaam karte hai, tu sirf message karta hai? Chal thoda support bhi kar de 😅",
+  "3 minute — itne me toh tu ek reel dekh ke bhool bhi jata hai. Yahan permanent credit milega bhai!",
+];
+
+app.post('/api/telegram/webhook', async (req, res) => {
+  res.sendStatus(200); // ack immediately — Telegram needs a fast response
+  try {
+    const msg = req.body && req.body.message;
+    if (!msg || !process.env.TELEGRAM_BOT_TOKEN) return;
+
+    // ---- CASE 1: Private DM to the bot (e.g. /start) ----
+    if (msg.chat.type === 'private') {
+      const userId = msg.from.id;
+      const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+
+      let supporter = null;
+      try {
+        const raw = await redisCommand(['GET', 'supporter:tg_' + userId]);
+        supporter = raw ? JSON.parse(raw) : null;
+      } catch (e) { /* Upstash not configured yet — treat as "not supported" */ }
+
+      let payload;
+      if (!supporter || !supporter.totalDays) {
+        const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
+        payload = {
+          chat_id: userId,
+          text: `👋 Abhi tak tumne support nahi kiya!\n\n${joke}\n\nBas 3 minute ki baat hai — neeche button dabao 👇`,
+          reply_markup: { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] }
+        };
+      } else {
+        payload = {
+          chat_id: userId,
+          text: `✅ Tumne already support kar rakha hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n\nThanks for the support! 🙌`,
+          reply_markup: { inline_keyboard: [[{ text: '🌐 Open Support Page', url: siteUrl }]] }
+        };
+      }
+
+      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      return;
+    }
+
+    // ---- CASE 2: Message in the COMMUNITY group's MAIN/General topic ----
+    // (sub-topics are left alone — only the General topic is gated).
+    // Requires the bot to have "Delete messages" admin permission there.
+    const communityChatId = process.env.COMMUNITY_CHAT_ID;
+    if (communityChatId && String(msg.chat.id) === String(communityChatId) && !msg.is_topic_message) {
+      const userId = msg.from.id;
+      let supporter = null;
+      try {
+        const raw = await redisCommand(['GET', 'supporter:tg_' + userId]);
+        supporter = raw ? JSON.parse(raw) : null;
+      } catch (e) { /* fail open-ish: treat as not-supported below */ }
+
+      if (!supporter || !supporter.totalDays) {
+        const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
+        const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+        try {
+          // Reply first (so the joke references their message)...
+          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: msg.chat.id,
+              reply_to_message_id: msg.message_id,
+              text: `😄 ${joke}\n\nPehle support karo, phir yahan baat kar sakte ho! 👇`,
+              reply_markup: { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] }
+            })
+          });
+          // ...then delete their message, so they can't keep chatting unsupported.
+          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id })
+          });
+        } catch (e) { console.error('community gate failed:', e.message); }
+      }
+      return;
+    }
+  } catch (err) {
+    console.error('Webhook handling failed:', err.message);
+  }
+});
+
+// One-time (or after each redeploy with a new URL) — registers the webhook above with Telegram.
+app.get('/api/telegram/setup-webhook', async (req, res) => {
+  if (!process.env.TELEGRAM_BOT_TOKEN) return res.status(500).json({ ok: false, error: 'Bot token not configured' });
+  try {
+    const webhookUrl = `${PUBLIC_BASE_URL}/api/telegram/webhook`;
+    const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/', (req, res) => res.send('Channel Support backend is running.'));
 
 // ---------------------------------------------------------------------------
@@ -413,6 +529,19 @@ app.post('/api/notify/support', async (req, res) => {
       data = await r.json();
     }
     res.json({ sent: !!data.ok, error: data.ok ? null : data.description });
+
+    // ---- Also unlock them in the Community's main topic (best-effort) ----
+    if (process.env.COMMUNITY_CHAT_ID) {
+      const mention = username ? '@' + username : (name || 'Someone');
+      fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: process.env.COMMUNITY_CHAT_ID,
+          text: `✅ ${mention}, ab tum message kar sakte ho! Support karne ke liye shukriya 🙌`
+        })
+      }).catch(() => {});
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ sent: false, error: 'Server error contacting Telegram' });

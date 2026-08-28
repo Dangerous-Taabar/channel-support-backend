@@ -328,6 +328,79 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
+    // ---- CASE 1.5: /check — admin-only, works in ANY group/supergroup/topic ----
+    // Reply to someone's message with /check, or type /check <username or ID>.
+    if ((msg.chat.type === 'group' || msg.chat.type === 'supergroup') && msg.text && /^\/check(@\S+)?(\s|$)/i.test(msg.text.trim())) {
+      const chatId = msg.chat.id;
+      let isAdmin = false;
+      try {
+        const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${msg.from.id}`);
+        const d = await r.json();
+        if (d.ok) isAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
+      } catch (e) { /* not admin on failure */ }
+      if (!isAdmin) return; // silently ignore for non-admins
+
+      const argMatch = msg.text.trim().match(/^\/check(?:@\S+)?\s*(.*)$/i);
+      const arg = ((argMatch && argMatch[1]) || '').trim().replace(/^@/, '');
+
+      let targetId = null, targetName = null, targetUsername = null;
+
+      if (arg) {
+        if (/^\d+$/.test(arg)) {
+          targetId = arg;
+        } else {
+          // No numeric ID given — scan supporter records for a matching username.
+          // Fine at small/medium scale; if the community grows very large this
+          // could be swapped for a maintained username→id index.
+          try {
+            const keys = await redisCommand(['KEYS', 'supporter:tg_*']);
+            for (const k of (keys || [])) {
+              const raw = await redisCommand(['GET', k]);
+              if (!raw) continue;
+              const rec = JSON.parse(raw);
+              if (rec.username && rec.username.toLowerCase() === arg.toLowerCase()) {
+                targetId = k.replace('supporter:tg_', '');
+                targetName = rec.name;
+                targetUsername = rec.username;
+                break;
+              }
+            }
+          } catch (e) { /* ignore */ }
+        }
+      } else if (msg.reply_to_message) {
+        const u = msg.reply_to_message.from;
+        targetId = u.id;
+        targetName = [u.first_name, u.last_name].filter(Boolean).join(' ');
+        targetUsername = u.username || '';
+      }
+
+      if (!targetId) {
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, reply_to_message_id: msg.message_id,
+            text: 'Kisi message ko reply karke /check likho, ya /check username / numeric ID daalo.' })
+        }).catch(() => {});
+        return;
+      }
+
+      let supporter = null;
+      try {
+        const raw = await redisCommand(['GET', 'supporter:tg_' + targetId]);
+        supporter = raw ? JSON.parse(raw) : null;
+      } catch (e) { /* ignore */ }
+
+      const label = targetUsername ? '@' + targetUsername : (targetName || ('ID ' + targetId));
+      const text = (supporter && supporter.totalDays)
+        ? `✅ ${label} ne support KIYA hai!\n📅 Total: ${supporter.totalDays} din\n🔥 Streak: ${supporter.streak} din`
+        : `❌ ${label} ne abhi tak support NAHI kiya hai.`;
+
+      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, reply_to_message_id: msg.message_id, text })
+      }).catch(() => {});
+      return;
+    }
+
     // ---- CASE 2: Message in the COMMUNITY group's MAIN/General topic ----
     // (sub-topics are left alone — only the General topic is gated).
     // Requires the bot to have "Delete messages" admin permission there.

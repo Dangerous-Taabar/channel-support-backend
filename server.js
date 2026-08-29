@@ -325,14 +325,30 @@ async function checkIsAdmin(userId) {
   } catch (e) { return false; }
 }
 
+// Cooldown window — must match the frontend's COOLDOWN_MS (12 hours in production).
+const SUPPORT_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+function isCurrentlyActive(supporter) {
+  return !!(supporter && supporter.lastSupportAt && (Date.now() - supporter.lastSupportAt) < SUPPORT_WINDOW_MS);
+}
+
+function hoursAgo(ts) {
+  if (!ts) return null;
+  return Math.floor((Date.now() - ts) / (60 * 60 * 1000));
+}
+
 async function buildWelcomeText(userId) {
   let supporter = null;
   try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); supporter = raw ? JSON.parse(raw) : null; } catch (e) {}
-  if (!supporter || !supporter.totalDays) {
+
+  if (!isCurrentlyActive(supporter)) {
     const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
-    return `👋 Abhi tak tumne support nahi kiya!\n\n${joke}\n\nBas 3 minute ki baat hai — neeche se dekho 👇`;
+    const staleNote = (supporter && supporter.totalDays)
+      ? `\n\n(Pichla support ${hoursAgo(supporter.lastSupportAt)} ghante pehle tha — ab dobara karna hoga)`
+      : '';
+    return `👋 Abhi support active nahi hai!${staleNote}\n\n${joke}\n\nBas 3 minute ki baat hai — neeche se dekho 👇`;
   }
-  return `✅ Tumne already support kar rakha hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n\nThanks for the support! 🙌`;
+  return `✅ Tumhara support abhi active hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n\nThanks for the support! 🙌`;
 }
 
 function tgSend(chatId, text, replyMarkup) {
@@ -382,7 +398,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
             const idx = all.findIndex(s => s.name === supporter.name && s.totalDays === supporter.totalDays && s.streak === supporter.streak);
             rank = idx >= 0 ? idx + 1 : '-';
           } catch (e) {}
-          text = `📊 Tumhare Stats\n\n🔥 Streak: ${supporter.streak} din\n📅 Total Support: ${supporter.totalDays} din\n🏆 Rank: #${rank} of ${total}`;
+          const statusLine = isCurrentlyActive(supporter)
+            ? '✅ Status: Active abhi'
+            : `⚠️ Status: Expired (${hoursAgo(supporter.lastSupportAt)} ghante pehle support kiya tha) — dobara karo!`;
+          text = `📊 Tumhare Stats\n\n${statusLine}\n🔥 Streak: ${supporter.streak} din\n📅 Lifetime Total: ${supporter.totalDays} din\n🏆 Rank: #${rank} of ${total}`;
         } else {
           text = `📊 Tumne abhi tak support nahi kiya hai!\n\nSupport karke apna naam yahan dekho 👇`;
         }
@@ -490,9 +509,14 @@ app.post('/api/telegram/webhook', async (req, res) => {
       } catch (e) { /* ignore */ }
 
       const label = targetUsername ? '@' + targetUsername : (targetName || ('ID ' + targetId));
-      const text = (supporter && supporter.totalDays)
-        ? `✅ ${label} ne support KIYA hai!\n📅 Total: ${supporter.totalDays} din\n🔥 Streak: ${supporter.streak} din`
-        : `❌ ${label} ne abhi tak support NAHI kiya hai.`;
+      let text;
+      if (!supporter || !supporter.totalDays) {
+        text = `❌ ${label} ne abhi tak KABHI support nahi kiya hai.`;
+      } else if (isCurrentlyActive(supporter)) {
+        text = `✅ ${label} abhi ACTIVE hai (recently supported)!\n📅 Lifetime Total: ${supporter.totalDays} din\n🔥 Streak: ${supporter.streak} din`;
+      } else {
+        text = `⚠️ ${label} ka support EXPIRE ho chuka hai (${hoursAgo(supporter.lastSupportAt)} ghante pehle) — abhi active nahi hai.\n📅 Lifetime Total: ${supporter.totalDays} din (streak toot chuki hogi agli baar)`;
+      }
 
       await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -551,7 +575,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
         supporter = raw ? JSON.parse(raw) : null;
       } catch (e) { /* fail open-ish: treat as not-supported below */ }
 
-      if (!supporter || !supporter.totalDays) {
+      if (!isCurrentlyActive(supporter)) {
         const jokePool = isAdmin ? ADMIN_JOKES : NUDGE_JOKES;
         const joke = jokePool[Math.floor(Math.random() * jokePool.length)];
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;

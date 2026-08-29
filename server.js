@@ -612,6 +612,36 @@ app.get('/api/telegram/setup-webhook', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// PUBLIC STATUS-CHECK API — for connecting a SEPARATE bot (e.g. your content
+// bot) to this system. Before sending content, that bot calls this endpoint
+// with the user's Telegram ID; we tell it whether that person is currently
+// an active supporter. Protected by a shared secret key (SUPPORT_API_KEY)
+// so random people can't probe it.
+// ---------------------------------------------------------------------------
+app.get('/api/support/status-check', async (req, res) => {
+  if (process.env.SUPPORT_API_KEY && req.query.key !== process.env.SUPPORT_API_KEY) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+  const telegramId = req.query.telegramId;
+  if (!telegramId) return res.status(400).json({ error: 'telegramId query param required' });
+
+  let supporter = null;
+  try {
+    const raw = await redisCommand(['GET', 'supporter:tg_' + telegramId]);
+    supporter = raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return res.status(500).json({ error: 'storage error' });
+  }
+
+  res.json({
+    active: isCurrentlyActive(supporter),
+    totalDays: supporter ? (supporter.totalDays || 0) : 0,
+    streak: supporter ? (supporter.streak || 0) : 0,
+    lastSupportAt: supporter ? supporter.lastSupportAt : null
+  });
+});
+
 app.get('/', (req, res) => res.send('Channel Support backend is running.'));
 
 // ---------------------------------------------------------------------------

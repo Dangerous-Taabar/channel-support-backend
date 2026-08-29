@@ -562,6 +562,25 @@ app.post('/api/telegram/webhook', async (req, res) => {
         return;
       }
 
+      // ---- /end — admin-only, manually ends YOUR OWN active /pass early ----
+      if (isAdmin && (msg.text || '').trim().toLowerCase() === '/end') {
+        await tgDeleteMsg(msg.message_id); // remove the command itself immediately
+        let hadPass = false;
+        try {
+          hadPass = !!(await redisCommand(['GET', 'admin_pass:tg_' + userId]));
+          await redisCommand(['DEL', 'admin_pass:tg_' + userId]);
+        } catch (e) { console.error('admin_pass end failed:', e.message); }
+
+        const replyText = hadPass
+          ? `🫡 Jo hukum! Ab aap bhi bina support kiye message nahi kar sakte.`
+          : `ℹ️ Koi active pass tha hi nahi.`;
+        const data = await tgSendMsg({ text: replyText });
+        if (data && data.ok && data.result) {
+          setTimeout(() => tgDeleteMsg(data.result.message_id), 60 * 1000); // self-cleans after 1 min
+        }
+        return;
+      }
+
       // ---- Active /pass exemption? Let them chat freely, no streak needed ----
       let hasPass = false;
       try {

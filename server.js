@@ -287,44 +287,144 @@ const ADMIN_JOKES = [
   "Admin panel se toh dikha diya, ab yahan bhi dikha do — support kar do 💪",
 ];
 
+function mainMenuKeyboard(isAdmin) {
+  const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+  const rows = [
+    [{ text: '📊 My Stats', callback_data: 'my_stats' }, { text: '🏆 Leaderboard', callback_data: 'leaderboard' }],
+    [{ text: '👥 Community Stats', callback_data: 'community_stats' }],
+  ];
+  if (isAdmin) {
+    rows.push([{ text: '🛠 Admin Panel', url: siteUrl + '/admin' }]);
+    rows.push([{ text: '🔍 /check kaise use karu?', callback_data: 'check_help' }]);
+  }
+  rows.push([{ text: '🚀 Support Now', url: siteUrl }]);
+  return { inline_keyboard: rows };
+}
+
+function backKeyboard() {
+  return { inline_keyboard: [[{ text: '🔙 Back to Menu', callback_data: 'menu' }]] };
+}
+
+async function fetchAllSupporters() {
+  const keys = await redisCommand(['KEYS', 'supporter:tg_*']);
+  let all = [];
+  for (const k of (keys || [])) {
+    const raw = await redisCommand(['GET', k]);
+    if (raw) all.push(JSON.parse(raw));
+  }
+  return all;
+}
+
+async function checkIsAdmin(userId) {
+  const chatId = process.env.COMMUNITY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+  if (!chatId || !process.env.TELEGRAM_BOT_TOKEN) return false;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${userId}`);
+    const d = await r.json();
+    return d.ok && (d.result.status === 'administrator' || d.result.status === 'creator');
+  } catch (e) { return false; }
+}
+
+async function buildWelcomeText(userId) {
+  let supporter = null;
+  try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); supporter = raw ? JSON.parse(raw) : null; } catch (e) {}
+  if (!supporter || !supporter.totalDays) {
+    const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
+    return `👋 Abhi tak tumne support nahi kiya!\n\n${joke}\n\nBas 3 minute ki baat hai — neeche se dekho 👇`;
+  }
+  return `✅ Tumne already support kar rakha hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n\nThanks for the support! 🙌`;
+}
+
+function tgSend(chatId, text, replyMarkup) {
+  return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
+  }).catch(() => {});
+}
+
+function tgEdit(chatId, messageId, text, replyMarkup) {
+  return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup })
+  }).catch(() => {});
+}
+
 app.post('/api/telegram/webhook', async (req, res) => {
   res.sendStatus(200); // ack immediately — Telegram needs a fast response
   try {
+    // ---- Inline menu button taps — everything happens in ONE message,
+    // edited in place, with a Back button to return to the main menu ----
+    const cb = req.body && req.body.callback_query;
+    if (cb && process.env.TELEGRAM_BOT_TOKEN) {
+      fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id })
+      }).catch(() => {});
+
+      const chatId = cb.message.chat.id;
+      const messageId = cb.message.message_id;
+      const userId = cb.from.id;
+      const isAdmin = await checkIsAdmin(userId);
+
+      if (cb.data === 'menu') {
+        const text = await buildWelcomeText(userId);
+        await tgEdit(chatId, messageId, text, mainMenuKeyboard(isAdmin));
+      } else if (cb.data === 'my_stats') {
+        let supporter = null;
+        try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); supporter = raw ? JSON.parse(raw) : null; } catch (e) {}
+        let text;
+        if (supporter && supporter.totalDays) {
+          let rank = '-', total = 0;
+          try {
+            const all = await fetchAllSupporters();
+            all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
+            total = all.length;
+            const idx = all.findIndex(s => s.name === supporter.name && s.totalDays === supporter.totalDays && s.streak === supporter.streak);
+            rank = idx >= 0 ? idx + 1 : '-';
+          } catch (e) {}
+          text = `📊 Tumhare Stats\n\n🔥 Streak: ${supporter.streak} din\n📅 Total Support: ${supporter.totalDays} din\n🏆 Rank: #${rank} of ${total}`;
+        } else {
+          text = `📊 Tumne abhi tak support nahi kiya hai!\n\nSupport karke apna naam yahan dekho 👇`;
+        }
+        await tgEdit(chatId, messageId, text, backKeyboard());
+      } else if (cb.data === 'leaderboard') {
+        let text = '🏆 Top 10 Supporters\n\n';
+        try {
+          const all = await fetchAllSupporters();
+          all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
+          if (!all.length) text += 'Abhi koi supporter nahi hai.';
+          else all.slice(0, 10).forEach((s, i) => { text += `${i + 1}. ${s.name} — ${s.totalDays || 0}d 🔥${s.streak || 0}\n`; });
+        } catch (e) { text += 'Data load nahi ho paya, dobara try karo.'; }
+        await tgEdit(chatId, messageId, text, backKeyboard());
+      } else if (cb.data === 'community_stats') {
+        let totalUsers = 0, supportedCount = 0, activeCount = 0;
+        try {
+          const all = await fetchAllSupporters();
+          totalUsers = all.length;
+          const now = Date.now();
+          for (const rec of all) {
+            if (rec.totalDays) supportedCount++;
+            if (rec.lastSupportAt && (now - rec.lastSupportAt) < 24 * 60 * 60 * 1000) activeCount++;
+          }
+        } catch (e) {}
+        const text = `👥 Community Stats\n\n🔗 Total Logged In: ${totalUsers}\n✅ Total Supported: ${supportedCount}\n⚡ Active (last 24h): ${activeCount}`;
+        await tgEdit(chatId, messageId, text, backKeyboard());
+      } else if (cb.data === 'check_help' && isAdmin) {
+        const text = `🔍 /check command\n\nKisi user ke message ko REPLY karke sirf /check likho, ya seedha /check username ya /check numeric-ID type karo.\n\nBot bata dega us insaan ne support kiya hai ya nahi — sirf admins hi use kar sakte hai.`;
+        await tgEdit(chatId, messageId, text, backKeyboard());
+      }
+      return;
+    }
+
     const msg = req.body && req.body.message;
     if (!msg || !process.env.TELEGRAM_BOT_TOKEN) return;
 
     // ---- CASE 1: Private DM to the bot (e.g. /start) ----
     if (msg.chat.type === 'private') {
       const userId = msg.from.id;
-      const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
-
-      let supporter = null;
-      try {
-        const raw = await redisCommand(['GET', 'supporter:tg_' + userId]);
-        supporter = raw ? JSON.parse(raw) : null;
-      } catch (e) { /* Upstash not configured yet — treat as "not supported" */ }
-
-      let payload;
-      if (!supporter || !supporter.totalDays) {
-        const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
-        payload = {
-          chat_id: userId,
-          text: `👋 Abhi tak tumne support nahi kiya!\n\n${joke}\n\nBas 3 minute ki baat hai — neeche button dabao 👇`,
-          reply_markup: { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] }
-        };
-      } else {
-        payload = {
-          chat_id: userId,
-          text: `✅ Tumne already support kar rakha hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n\nThanks for the support! 🙌`,
-          reply_markup: { inline_keyboard: [[{ text: '🌐 Open Support Page', url: siteUrl }]] }
-        };
-      }
-
-      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const isAdmin = await checkIsAdmin(userId);
+      const text = await buildWelcomeText(userId);
+      await tgSend(userId, text, mainMenuKeyboard(isAdmin));
       return;
     }
 

@@ -8,6 +8,37 @@ const FormData = require('form-data');
 const app = express();
 app.use(express.json({ limit: '5mb' })); // 5mb so an uploaded channel-logo (base64) fits
 
+// ---------------------------------------------------------------------------
+// SECURITY HEADERS — basic hardening without needing extra dependencies.
+// ---------------------------------------------------------------------------
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  next();
+});
+
+// ---------------------------------------------------------------------------
+// RATE LIMITING — simple in-memory sliding window per IP. Stops a script
+// from hammering any endpoint (fake support sessions, admin-login brute
+// force, storage spam). Resets naturally every WINDOW_MS.
+// ---------------------------------------------------------------------------
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 60; // requests per IP per window
+const rateLimitBuckets = new Map();
+setInterval(() => rateLimitBuckets.clear(), RATE_LIMIT_WINDOW_MS).unref();
+
+app.use((req, res, next) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+  const count = (rateLimitBuckets.get(ip) || 0) + 1;
+  rateLimitBuckets.set(ip, count);
+  if (count > RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: 'Too many requests — thodi der baad try karo.' });
+  }
+  next();
+});
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
 app.use(cors({
   origin: allowedOrigins.includes('*') ? true : allowedOrigins
@@ -39,10 +70,18 @@ async function redisCommand(cmd) {
   return data.result;
 }
 
+// Only known key patterns are writable/readable — stops random/abusive keys
+// and keeps the value size sane (branding logo can be a few hundred KB).
+const ALLOWED_KEY_PATTERN = /^(profile|admins|settings|branding|admin_audit_log|supporter:[\w-]+|adminprofile:[\w-]+|cbfile:\d+|cbfile_seq|cbpost:\d+|cbpost_seq|cb:users|cb:admins|cbuser:[\w-]+|cb:log_total|cb:log_matched|session:[\w-]+|admin_pass:tg_[\w-]+)$/;
+function isValidStorageKey(key) {
+  return typeof key === 'string' && key.length <= 120 && ALLOWED_KEY_PATTERN.test(key);
+}
+const MAX_VALUE_BYTES = 1_500_000; // ~1.5MB — comfortably covers a base64 logo
+
 app.post('/api/storage/get', async (req, res) => {
   try {
     const { key } = req.body || {};
-    if (!key) return res.status(400).json({ error: 'key required' });
+    if (!isValidStorageKey(key)) return res.status(400).json({ error: 'invalid key' });
     const value = await redisCommand(['GET', key]);
     res.json({ value });
   } catch (err) {
@@ -53,7 +92,10 @@ app.post('/api/storage/get', async (req, res) => {
 app.post('/api/storage/set', async (req, res) => {
   try {
     const { key, value } = req.body || {};
-    if (!key) return res.status(400).json({ error: 'key required' });
+    if (!isValidStorageKey(key)) return res.status(400).json({ error: 'invalid key' });
+    if (typeof value === 'string' && value.length > MAX_VALUE_BYTES) {
+      return res.status(413).json({ error: 'value too large' });
+    }
     await redisCommand(['SET', key, value]);
     res.json({ ok: true });
   } catch (err) {
@@ -292,6 +334,7 @@ function mainMenuKeyboard(isAdmin) {
   const rows = [
     [{ text: '📊 My Stats', callback_data: 'my_stats' }, { text: '🏆 Leaderboard', callback_data: 'leaderboard' }],
     [{ text: '👥 Community Stats', callback_data: 'community_stats' }],
+    [{ text: '🗂️ Browse Vault', callback_data: 'browse_menu' }],
   ];
   if (isAdmin) {
     rows.push([{ text: '🛠 Admin Panel', url: siteUrl + '/admin' }]);
@@ -365,6 +408,388 @@ function tgEdit(chatId, messageId, text, replyMarkup) {
   }).catch(() => {});
 }
 
+// =============================================================================
+// CONTENT BOT (merged from "Forward Bot") — file vault, search, /tv /phone
+// /filter, admin upload, broadcast. Same bot (TELEGRAM_BOT_TOKEN), same
+// webhook, just a different feature set. Needs these extra env vars:
+//   CONTENT_GROUP_CHAT_ID   — group where /tv /phone are typed
+//   VAULT_CHANNEL_ID        — channel where files are stored/auto-indexed
+//   CONTENT_OWNER_IDS       — comma-separated Telegram IDs, permanent owners
+// =============================================================================
+
+const CATEGORY_LABELS = { tv: '📺 Android TV', phone: '📱 Phone', live_tv: '📡 Live TV' };
+const DELETE_AFTER_SECONDS = 120;
+
+const _DEVICE_TV_PATTERNS = [/android\s*tv/i, /smart\s*tv/i, /fire\s*tv/i, /firestick/i, /google\s*tv/i, /set[- ]?top\s*box/i, /\bstb\b/i];
+const _GENERIC_TV_PATTERN = /\btv\b/i;
+const _VERSION_PATTERN = /[vV]?\d+(?:\.\d+){1,6}/;
+const _EXTENSION_PATTERN = /\.\w{2,4}$/;
+const _PAREN_PATTERN = /\([^)]*\)/g;
+const _PUNCT_PATTERN = /[_\-+]+/g;
+const _NOISE_WORDS = new Set(['android', 'arm64v8', 'arm64', 'arm', 'armv7', 'x86', 'x64', 'apk', 'app', 'mod', 'official', 'premium', 'pro', 'new', 'latest', 'update', 'version', 'beta', 'full', 'cracked', 'patched', 'unlocked']);
+
+function categorize(name, caption) {
+  const titleLine = (caption || '').trim().split('\n')[0] || '';
+  const text = `${name || ''} ${titleLine}`;
+  if (_DEVICE_TV_PATTERNS.some(p => p.test(text))) return 'tv';
+  if (_GENERIC_TV_PATTERN.test(text)) return 'live_tv';
+  return 'phone';
+}
+function extractVersion(name) {
+  const m = _VERSION_PATTERN.exec(name || '');
+  if (!m) return 'Latest';
+  let v = m[0];
+  if (!v.toLowerCase().startsWith('v')) v = 'v' + v;
+  return v;
+}
+function extractBaseKeyword(name) {
+  let text = (name || '').toLowerCase();
+  text = text.replace(_EXTENSION_PATTERN, '');
+  text = text.replace(_PAREN_PATTERN, ' ');
+  text = text.replace(_VERSION_PATTERN, ' ');
+  text = text.replace(_PUNCT_PATTERN, ' ');
+  return text.split(/\s+/).filter(w => w && !_NOISE_WORDS.has(w)).join(' ').trim();
+}
+
+// ---- Storage (Redis) ----
+async function cbNextId(seqKey) {
+  return await redisCommand(['INCR', seqKey]);
+}
+async function cbAddFile(fileUniqueId, fileId, fileName, fileType, caption, category) {
+  // Dedup by file_unique_id (Telegram's stable ID for the underlying media)
+  const existingKeys = await redisCommand(['KEYS', 'cbfile:*']);
+  for (const k of (existingKeys || [])) {
+    const raw = await redisCommand(['GET', k]);
+    if (raw && JSON.parse(raw).fileUniqueId === fileUniqueId) return null; // already indexed
+  }
+  const id = await cbNextId('cbfile_seq');
+  const rec = { id, fileUniqueId, fileId, fileName, fileType, caption: caption || '', category: category || 'phone', addedAt: Date.now() };
+  await redisCommand(['SET', 'cbfile:' + id, JSON.stringify(rec)]);
+  return rec;
+}
+async function cbAllFiles() {
+  const keys = await redisCommand(['KEYS', 'cbfile:*']);
+  let out = [];
+  for (const k of (keys || [])) {
+    const raw = await redisCommand(['GET', k]);
+    if (raw) out.push(JSON.parse(raw));
+  }
+  return out;
+}
+async function cbSearchFilesAll(query, category) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const all = await cbAllFiles();
+  return all.filter(f => {
+    const hay = (f.fileName + ' ' + (f.caption || '')).toLowerCase();
+    if (!words.every(w => hay.includes(w))) return false;
+    if (category && f.category !== category) return false;
+    return true;
+  }).sort((a, b) => b.id - a.id);
+}
+async function cbGetFileById(id) {
+  const raw = await redisCommand(['GET', 'cbfile:' + id]);
+  return raw ? JSON.parse(raw) : null;
+}
+async function cbDeleteFilesByName(query) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return 0;
+  const all = await cbAllFiles();
+  let count = 0;
+  for (const f of all) {
+    const hay = (f.fileName + ' ' + (f.caption || '')).toLowerCase();
+    if (words.every(w => hay.includes(w))) {
+      await redisCommand(['DEL', 'cbfile:' + f.id]);
+      count++;
+    }
+  }
+  return count;
+}
+async function cbCountByCategory(category) {
+  const all = await cbAllFiles();
+  return all.filter(f => f.category === category).length;
+}
+async function cbListItemsByCategories(categories, offset, limit) {
+  const all = await cbAllFiles();
+  let combined = all.filter(f => categories.includes(f.category)).map(f => ({ tag: 'F' + f.id, name: f.fileName, category: f.category }));
+  combined.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  return { page: combined.slice(offset, offset + limit), total: combined.length };
+}
+async function cbAddUser(userId, username) {
+  await redisCommand(['SADD', 'cb:users', String(userId)]);
+  await redisCommand(['SET', 'cbuser:' + userId, JSON.stringify({ userId, username, firstSeen: Date.now() })]);
+}
+async function cbGetAllUserIds() {
+  return (await redisCommand(['SMEMBERS', 'cb:users'])) || [];
+}
+function cbOwnerIds() {
+  return (process.env.CONTENT_OWNER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+async function cbIsAdmin(userId) {
+  if (cbOwnerIds().includes(String(userId))) return true;
+  return !!(await redisCommand(['SISMEMBER', 'cb:admins', String(userId)]));
+}
+async function cbAddAdmin(userId) { await redisCommand(['SADD', 'cb:admins', String(userId)]); }
+async function cbRemoveAdmin(userId) { await redisCommand(['SREM', 'cb:admins', String(userId)]); }
+async function cbGetDynamicAdmins() { return (await redisCommand(['SMEMBERS', 'cb:admins'])) || []; }
+async function cbLogRequest(matched) {
+  await redisCommand(['INCR', 'cb:log_total']);
+  if (matched) await redisCommand(['INCR', 'cb:log_matched']);
+}
+async function cbGetStats() {
+  const total = parseInt((await redisCommand(['GET', 'cb:log_total'])) || '0', 10);
+  const matched = parseInt((await redisCommand(['GET', 'cb:log_matched'])) || '0', 10);
+  return { total, matched };
+}
+
+// ---- Telegram send helpers ----
+async function tgSendFile(chatId, rec, extra) {
+  const method = { photo: 'sendPhoto', video: 'sendVideo', animation: 'sendAnimation' }[rec.fileType] || 'sendDocument';
+  const fieldName = { photo: 'photo', video: 'video', animation: 'animation' }[rec.fileType] || 'document';
+  const body = { chat_id: chatId, caption: rec.caption || rec.fileName, [fieldName]: rec.fileId, ...extra };
+  const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  return r.json();
+}
+async function tgDeleteMsgIn(chatId, messageId) {
+  return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+  }).catch(() => {});
+}
+function cbScheduleDelete(chatId, messageId, delaySec = DELETE_AFTER_SECONDS) {
+  setTimeout(() => tgDeleteMsgIn(chatId, messageId), delaySec * 1000);
+}
+async function tgSendText(chatId, text, extra) {
+  const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, ...extra })
+  });
+  return r.json();
+}
+
+// Delivers content to a user's private chat; returns {delivered, dmBlocked, displayName}
+async function deliverContent(targetUserId, query, category) {
+  const results = await cbSearchFilesAll(query, category);
+  if (!results.length) return { delivered: false, dmBlocked: false };
+  const rec = results[0]; // best/most-recent match
+  const data = await tgSendFile(targetUserId, rec);
+  if (!data.ok) {
+    const blocked = /blocked|deactivated|not found/i.test(data.description || '');
+    return { delivered: false, dmBlocked: blocked, displayName: rec.fileName };
+  }
+  return { delivered: true, dmBlocked: false, displayName: rec.fileName };
+}
+async function deliverSpecific(targetUserId, tag) {
+  if (!tag.startsWith('F')) return { success: false, error: 'Unknown item type' };
+  const rec = await cbGetFileById(tag.slice(1));
+  if (!rec) return { success: false, error: 'Item mil nahi paya (delete ho chuka hoga).' };
+  const data = await tgSendFile(targetUserId, rec);
+  if (!data.ok) {
+    const blocked = /blocked|deactivated|not found/i.test(data.description || '');
+    return { success: false, displayName: rec.fileName, error: blocked ? 'Pehle bot ko /start karo.' : (data.description || 'Send fail hua.') };
+  }
+  return { success: true, displayName: rec.fileName };
+}
+
+function cbBrowseKeyboard(items, category, page, totalPages) {
+  const rows = items.map(it => [{ text: it.name.length > 40 ? it.name.slice(0, 37) + '…' : it.name, callback_data: `get:${it.tag}` }]);
+  const nav = [];
+  if (page > 0) nav.push({ text: '⬅️ Prev', callback_data: `browse:${category}:${page - 1}` });
+  if (page < totalPages - 1) nav.push({ text: 'Next ➡️', callback_data: `browse:${category}:${page + 1}` });
+  if (nav.length) rows.push(nav);
+  rows.push([{ text: '🔙 Categories', callback_data: 'browse_menu' }]);
+  return { inline_keyboard: rows };
+}
+
+const CONTENT_PAGE_SIZE = 8;
+
+function gateMessage() {
+  const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+  return `⚠️ Pehle channel ko support karo, tabhi content milega!\n👉 ${siteUrl}`;
+}
+async function hasSupportedTelegram(userId) {
+  try {
+    const raw = await redisCommand(['GET', 'supporter:tg_' + userId]);
+    return isCurrentlyActive(raw ? JSON.parse(raw) : null);
+  } catch (e) { return false; }
+}
+
+// Returns true if this message WAS a content-bot command (caller should stop
+// processing it further); false if it wasn't one (caller falls through to
+// the normal support-bot routing below).
+async function handleContentCommand(msg) {
+  const text = msg.text.trim();
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const isGroupContext = String(chatId) === String(process.env.CONTENT_GROUP_CHAT_ID);
+
+  // ---- /start deep link: /start tv_netflix or /start phone_whatsapp ----
+  if (/^\/start(@\S+)?(\s|$)/i.test(text)) {
+    const payload = text.split(/\s+/)[1];
+    if (payload && payload.includes('_')) {
+      const [category, ...rest] = payload.split('_');
+      const query = rest.join(' ').trim();
+      if (CATEGORY_LABELS[category] && query) {
+        await cbAddUser(userId, msg.from.username || msg.from.first_name || 'unknown');
+        if (!(await cbIsAdmin(userId)) && !(await hasSupportedTelegram(userId))) {
+          await tgSendText(chatId, gateMessage());
+          return true;
+        }
+        const result = await deliverContent(userId, query, category);
+        await cbLogRequest(result.delivered);
+        if (!result.delivered) await tgSendText(chatId, `❌ '${query}' ${CATEGORY_LABELS[category]} Vault me nahi mila.`);
+        return true;
+      }
+    }
+    return false; // plain /start — let the support-bot's own welcome menu handle it
+  }
+
+  // ---- /tv <query>, /phone <query> ----
+  const catMatch = text.match(/^\/(tv|phone)(@\S+)?\s+(.+)/i);
+  if (catMatch) {
+    const category = catMatch[1].toLowerCase();
+    const query = catMatch[3].trim();
+    await cbAddUser(userId, msg.from.username || msg.from.first_name || 'unknown');
+
+    if (!(await cbIsAdmin(userId)) && !(await hasSupportedTelegram(userId))) {
+      const gateMsg = gateMessage();
+      if (isGroupContext) {
+        const sent = await tgSendText(chatId, gateMsg, { reply_to_message_id: msg.message_id });
+        if (sent.ok) cbScheduleDelete(chatId, sent.result.message_id);
+        cbScheduleDelete(chatId, msg.message_id);
+      } else {
+        await tgSendText(chatId, gateMsg);
+      }
+      return true;
+    }
+
+    const result = await deliverContent(userId, query, category);
+    await cbLogRequest(result.delivered);
+
+    if (isGroupContext) {
+      let replyText;
+      if (result.delivered) replyText = `✅ ${result.displayName} sent to your Private Chat!`;
+      else if (result.dmBlocked) replyText = `⚠️ Pehle mujhe DM me /start karo, phir dobara try karo.`;
+      else replyText = `❌ '${query}' ${CATEGORY_LABELS[category]} Vault me nahi mila.`;
+      const sent = await tgSendText(chatId, replyText, { reply_to_message_id: msg.message_id });
+      if (sent.ok) cbScheduleDelete(chatId, sent.result.message_id);
+      cbScheduleDelete(chatId, msg.message_id);
+    } else {
+      if (result.dmBlocked) await tgSendText(chatId, 'Pehle /start karo.');
+      else if (!result.delivered) await tgSendText(chatId, `❌ '${query}' ${CATEGORY_LABELS[category]} Vault me nahi mila.`);
+    }
+    return true;
+  }
+
+  // ---- /filter — category picker ----
+  if (/^\/filter(@\S+)?(\s|$)/i.test(text)) {
+    await tgSendText(chatId, `🔎 Category choose karo:`, {
+      reply_markup: { inline_keyboard: [
+        [{ text: '📱 Phone', callback_data: 'browse:phone:0' }, { text: '📡 Live TV', callback_data: 'browse:live_tv:0' }],
+        [{ text: '📺 Android TV', callback_data: 'browse:tv:0' }],
+      ] }
+    });
+    return true;
+  }
+
+  // ---- Everything below is ADMIN-ONLY (silently ignored for non-admins) ----
+  const isAdminHere = await cbIsAdmin(userId);
+
+  if (/^\/search(@\S+)?\s+/i.test(text)) {
+    if (!isAdminHere) return true;
+    const rest = text.replace(/^\/search(@\S+)?\s+/i, '').trim();
+    const parts = rest.split(/\s+/);
+    let category = null;
+    if (['tv', 'phone', 'live_tv'].includes((parts[parts.length - 1] || '').toLowerCase())) category = parts.pop().toLowerCase();
+    const query = parts.join(' ');
+    const results = await cbSearchFilesAll(query, category);
+    if (!results.length) { await tgSendText(chatId, `❌ '${query}' ke liye kuch nahi mila.`); return true; }
+    const buttons = results.slice(0, 20).map(f => [{ text: f.fileName.length > 45 ? f.fileName.slice(0, 42) + '…' : f.fileName, callback_data: `get:F${f.id}` }]);
+    await tgSendText(chatId, `🔎 ${results.length} result(s) mile '${query}' ke liye.\n👇 Tap karo jo bhejwana hai:`, { reply_markup: { inline_keyboard: buttons } });
+    return true;
+  }
+
+  if (/^\/vault(@\S+)?(\s|$)/i.test(text)) {
+    if (!isAdminHere) return true;
+    const all = await cbAllFiles();
+    const tv = all.filter(f => f.category === 'tv').length;
+    const phone = all.filter(f => f.category === 'phone').length;
+    const liveTv = all.filter(f => f.category === 'live_tv').length;
+    await tgSendText(chatId, `🗄️ Vault Stats\n\n📦 Total: ${all.length}\n📺 Android TV: ${tv}\n📱 Phone: ${phone}\n📡 Live TV: ${liveTv}`);
+    return true;
+  }
+
+  if (/^\/filecount(@\S+)?(\s|$)/i.test(text)) {
+    if (!isAdminHere) return true;
+    await tgSendText(chatId, `📦 Total files in Vault: ${(await cbAllFiles()).length}`);
+    return true;
+  }
+
+  if (/^\/listfiles(@\S+)?(\s|$)/i.test(text)) {
+    if (!isAdminHere) return true;
+    const all = (await cbAllFiles()).sort((a, b) => b.id - a.id).slice(0, 100);
+    const listText = all.length ? all.map((f, i) => `${i + 1}. ${f.fileName} [${f.category}]`).join('\n') : 'Vault khaali hai.';
+    await tgSendText(chatId, `📋 Latest Files:\n\n${listText}`);
+    return true;
+  }
+
+  if (/^\/removefile(@\S+)?\s+/i.test(text)) {
+    if (!isAdminHere) return true;
+    const query = text.replace(/^\/removefile(@\S+)?\s+/i, '').trim();
+    const count = await cbDeleteFilesByName(query);
+    await tgSendText(chatId, count ? `🗑️ ${count} file(s) delete ho gayi.` : `❌ '${query}' se match karti koi file nahi mili.`);
+    return true;
+  }
+
+  if (/^\/addadmin(@\S+)?\s+/i.test(text)) {
+    if (!cbOwnerIds().includes(String(userId))) return true; // owner-only
+    const targetId = text.replace(/^\/addadmin(@\S+)?\s+/i, '').trim();
+    await cbAddAdmin(targetId);
+    await tgSendText(chatId, `✅ ${targetId} ko admin bana diya.`);
+    return true;
+  }
+
+  if (/^\/removeadmin(@\S+)?\s+/i.test(text)) {
+    if (!cbOwnerIds().includes(String(userId))) return true;
+    const targetId = text.replace(/^\/removeadmin(@\S+)?\s+/i, '').trim();
+    await cbRemoveAdmin(targetId);
+    await tgSendText(chatId, `✅ ${targetId} ko admin se hata diya.`);
+    return true;
+  }
+
+  if (/^\/adminlist(@\S+)?(\s|$)/i.test(text)) {
+    if (!isAdminHere) return true;
+    const dynamic = await cbGetDynamicAdmins();
+    await tgSendText(chatId, `👑 Owners:\n${cbOwnerIds().join('\n') || '-'}\n\n🛡️ Admins:\n${dynamic.join('\n') || '-'}`);
+    return true;
+  }
+
+  if (/^\/broadcast(@\S+)?\s+/i.test(text)) {
+    if (!isAdminHere) return true;
+    const broadcastText = text.replace(/^\/broadcast(@\S+)?\s+/i, '');
+    const userIds = await cbGetAllUserIds();
+    let sent = 0, failed = 0;
+    for (const uid of userIds) {
+      try { const r = await tgSendText(uid, broadcastText); if (r.ok) sent++; else failed++; }
+      catch (e) { failed++; }
+      await new Promise(r => setTimeout(r, 60));
+    }
+    await tgSendText(chatId, `📢 Broadcast done!\n✅ Sent: ${sent}\n❌ Failed: ${failed}`);
+    return true;
+  }
+
+  if (/^\/stats(@\S+)?(\s|$)/i.test(text)) {
+    if (!isAdminHere) return true;
+    const { total, matched } = await cbGetStats();
+    await tgSendText(chatId, `📊 Content Bot Stats\n\n👤 Users: ${(await cbGetAllUserIds()).length}\n📨 Total Requests: ${total}\n✅ Matched: ${matched}`);
+    return true;
+  }
+
+  return false;
+}
+
 app.post('/api/telegram/webhook', async (req, res) => {
   res.sendStatus(200); // ack immediately — Telegram needs a fast response
   try {
@@ -431,12 +856,83 @@ app.post('/api/telegram/webhook', async (req, res) => {
       } else if (cb.data === 'check_help' && isAdmin) {
         const text = `🔍 /check command\n\nKisi user ke message ko REPLY karke sirf /check likho, ya seedha /check username ya /check numeric-ID type karo.\n\nBot bata dega us insaan ne support kiya hai ya nahi — sirf admins hi use kar sakte hai.`;
         await tgEdit(chatId, messageId, text, backKeyboard());
+      } else if (cb.data.startsWith('send:') || cb.data.startsWith('get:')) {
+        // Search-result / browse-list button tap — deliver that exact file.
+        const tag = cb.data.split(':', 2)[1];
+        const result = await deliverSpecific(userId, tag);
+        await cbLogRequest(result.success);
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: cb.id,
+            text: result.success ? '✅ Sent to your Private Chat!' : `❌ ${result.error || 'Nahi bhej paya.'}`,
+            show_alert: !result.success,
+          })
+        }).catch(() => {});
+      } else if (cb.data === 'browse_menu') {
+        const text = `🗂️ Browse by Category\n\nKis category ke items dekhne hai?`;
+        await tgEdit(chatId, messageId, text, {
+          inline_keyboard: [
+            [{ text: '📱 Phone', callback_data: 'browse:phone:0' }, { text: '📡 Live TV', callback_data: 'browse:live_tv:0' }],
+            [{ text: '📺 Android TV', callback_data: 'browse:tv:0' }],
+            [{ text: '🔙 Back to Menu', callback_data: 'menu' }],
+          ]
+        });
+      } else if (cb.data.startsWith('browse:')) {
+        const [, category, pageStr] = cb.data.split(':');
+        const page = parseInt(pageStr, 10) || 0;
+        const { page: items, total } = await cbListItemsByCategories([category], page * CONTENT_PAGE_SIZE, CONTENT_PAGE_SIZE);
+        const totalPages = Math.max(1, Math.ceil(total / CONTENT_PAGE_SIZE));
+        const text = items.length
+          ? `${CATEGORY_LABELS[category] || category} — Page ${page + 1}/${totalPages} (${total} items)\n\nTap karo jo bhejwana hai:`
+          : `${CATEGORY_LABELS[category] || category} me abhi kuch nahi hai.`;
+        await tgEdit(chatId, messageId, text, cbBrowseKeyboard(items, category, page, totalPages));
+      }
+      return;
+    }
+
+    // ---- CHANNEL POST — auto-index new files posted/reposted to the Vault ----
+    // (this is also how the one-time migration of your old 76 files works —
+    // see migrate_to_new_bot.py)
+    const chpost = req.body && req.body.channel_post;
+    if (chpost && String(chpost.chat.id) === String(process.env.VAULT_CHANNEL_ID)) {
+      const media = chpost.document || chpost.photo?.[chpost.photo.length - 1] || chpost.video || chpost.animation;
+      if (media) {
+        const fileType = chpost.document ? 'document' : chpost.photo ? 'photo' : chpost.video ? 'video' : 'animation';
+        const fileName = media.file_name || (chpost.caption || '').split('\n')[0] || 'file';
+        const category = categorize(fileName, chpost.caption);
+        try {
+          await cbAddFile(media.file_unique_id, media.file_id, fileName, fileType, chpost.caption || '', category);
+        } catch (e) { console.error('vault auto-index failed:', e.message); }
       }
       return;
     }
 
     const msg = req.body && req.body.message;
     if (!msg || !process.env.TELEGRAM_BOT_TOKEN) return;
+
+    // ---- CONTENT COMMANDS (/tv /phone /filter /search /vault etc.) ----
+    // Checked BEFORE the private-DM welcome menu below, so these still work
+    // when typed in a private chat with the bot.
+    if (msg.text && await handleContentCommand(msg)) return;
+
+    // ---- CONTENT ADMIN UPLOAD — admin sends a file directly to the bot ----
+    const uploadedMedia = msg.document || msg.photo?.[msg.photo?.length - 1] || msg.video || msg.animation;
+    if (msg.chat.type === 'private' && uploadedMedia && await cbIsAdmin(msg.from.id)) {
+      const fileType = msg.document ? 'document' : msg.photo ? 'photo' : msg.video ? 'video' : 'animation';
+      const fileName = uploadedMedia.file_name || (msg.caption || '').split('\n')[0] || 'file';
+      const category = categorize(fileName, msg.caption);
+      const rec = await cbAddFile(uploadedMedia.file_unique_id, uploadedMedia.file_id, fileName, fileType, msg.caption || '', category);
+      if (rec && process.env.VAULT_CHANNEL_ID) {
+        // Keep a backup copy in the Vault channel too
+        tgSendFile(process.env.VAULT_CHANNEL_ID, rec).catch(() => {});
+      }
+      const sent = await tgSendText(msg.chat.id, rec
+        ? `✅ Indexed as ${CATEGORY_LABELS[category]}!\n📄 ${fileName}`
+        : `ℹ️ Yeh file pehle se Vault me hai.`);
+      if (sent && sent.ok) cbScheduleDelete(msg.chat.id, sent.result.message_id);
+      return;
+    }
 
     // ---- CASE 1: Private DM to the bot (e.g. /start) ----
     if (msg.chat.type === 'private') {
@@ -653,8 +1149,14 @@ app.get('/api/support/status-check', async (req, res) => {
     return res.status(500).json({ error: 'storage error' });
   }
 
+  let adminPass = false;
+  try {
+    adminPass = !!(await redisCommand(['GET', 'admin_pass:tg_' + telegramId]));
+  } catch (e) { /* ignore */ }
+
   res.json({
     active: isCurrentlyActive(supporter),
+    adminPass, // true if this admin currently has an active /pass (from the community chat)
     totalDays: supporter ? (supporter.totalDays || 0) : 0,
     streak: supporter ? (supporter.streak || 0) : 0,
     lastSupportAt: supporter ? supporter.lastSupportAt : null

@@ -321,14 +321,6 @@ const NUDGE_JOKES = [
 ];
 
 // Special taunts reserved for admins who message without supporting.
-const ADMIN_JOKES = [
-  "Arre boss, khud hi rules banate ho aur khud hi todte ho? 😄 Pehle support karo!",
-  "Admin ho toh support nahi karoge kya? Power ke sath thoda support bhi chalta hai boss 😎",
-  "Crown pehna hai toh zimmedari bhi nibhao — 3 minute nikaalo bhai 👑",
-  "Sabko bolte ho support karo, khud bhool gaye? 😂 Chalo, misaal banao!",
-  "Admin panel se toh dikha diya, ab yahan bhi dikha do — support kar do 💪",
-];
-
 function mainMenuKeyboard(isAdmin) {
   const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
   const rows = [
@@ -1036,53 +1028,15 @@ app.post('/api/telegram/webhook', async (req, res) => {
         body: JSON.stringify({ chat_id: msg.chat.id, ...body })
       }).then(r => r.json()).catch(() => null);
 
-      // Is this sender an admin/creator of the community?
+      // Admins/creator are fully exempt from this gate — always free to
+      // message, no /pass needed, no restriction at all.
       let isAdmin = false;
       try {
         const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(communityChatId)}&user_id=${userId}`);
         const d = await r.json();
         if (d.ok) isAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
       } catch (e) { /* assume not admin on failure */ }
-
-      // ---- /pass — admin-only 12-hour bypass of this gate (no streak credit) ----
-      if (isAdmin && (msg.text || '').trim().toLowerCase() === '/pass') {
-        await tgDeleteMsg(msg.message_id); // remove the command itself immediately
-        try {
-          await redisCommand(['SET', 'admin_pass:tg_' + userId, '1', 'EX', String(12 * 60 * 60)]);
-        } catch (e) { console.error('admin_pass set failed:', e.message); }
-
-        const data = await tgSendMsg({ text: `🫡 Jo hukum, mere aaka! Agle 12 ghante ke liye tumhe support maangunga nahi — bina rok-tok baat karo.` });
-        if (data && data.ok && data.result) {
-          setTimeout(() => tgDeleteMsg(data.result.message_id), 60 * 1000); // self-cleans after 1 min
-        }
-        return;
-      }
-
-      // ---- /end — admin-only, manually ends YOUR OWN active /pass early ----
-      if (isAdmin && (msg.text || '').trim().toLowerCase() === '/end') {
-        await tgDeleteMsg(msg.message_id); // remove the command itself immediately
-        let hadPass = false;
-        try {
-          hadPass = !!(await redisCommand(['GET', 'admin_pass:tg_' + userId]));
-          await redisCommand(['DEL', 'admin_pass:tg_' + userId]);
-        } catch (e) { console.error('admin_pass end failed:', e.message); }
-
-        const replyText = hadPass
-          ? `🫡 Jo hukum! Ab aap bhi bina support kiye message nahi kar sakte.`
-          : `ℹ️ Koi active pass tha hi nahi.`;
-        const data = await tgSendMsg({ text: replyText });
-        if (data && data.ok && data.result) {
-          setTimeout(() => tgDeleteMsg(data.result.message_id), 60 * 1000); // self-cleans after 1 min
-        }
-        return;
-      }
-
-      // ---- Active /pass exemption? Let them chat freely, no streak needed ----
-      let hasPass = false;
-      try {
-        hasPass = !!(await redisCommand(['GET', 'admin_pass:tg_' + userId]));
-      } catch (e) { /* ignore */ }
-      if (hasPass) return;
+      if (isAdmin) return;
 
       let supporter = null;
       try {
@@ -1091,20 +1045,22 @@ app.post('/api/telegram/webhook', async (req, res) => {
       } catch (e) { /* fail open-ish: treat as not-supported below */ }
 
       if (!isCurrentlyActive(supporter)) {
-        const jokePool = isAdmin ? ADMIN_JOKES : NUDGE_JOKES;
-        const joke = jokePool[Math.floor(Math.random() * jokePool.length)];
+        const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
         const tag = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
-        const extra = isAdmin ? `\n\n(Ya /pass likho agar abhi zaroori kaam hai — 12 ghante ki chhoot mil jayegi 🫡)` : '';
         try {
           // Reply first (so the joke references their message)...
-          await tgSendMsg({
+          const data = await tgSendMsg({
             reply_to_message_id: msg.message_id,
-            text: `${tag} 😄 ${joke}\n\nPehle support karo, phir yahan baat kar sakte ho! 👇${extra}`,
+            text: `${tag} 😄 ${joke}\n\nPehle support karo, phir yahan baat kar sakte ho! 👇`,
             reply_markup: { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] }
           });
           // ...then delete their message, so they can't keep chatting unsupported.
           await tgDeleteMsg(msg.message_id);
+          // ...and auto-clean our own nudge reply after 2 minutes too.
+          if (data && data.ok && data.result) {
+            setTimeout(() => tgDeleteMsg(data.result.message_id), 2 * 60 * 1000);
+          }
         } catch (e) { console.error('community gate failed:', e.message); }
       }
       return;

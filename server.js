@@ -160,22 +160,30 @@ app.post('/api/support/start', async (req, res) => {
 
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
 
-  let finalLink = callbackUrl;
-  try {
-    if (process.env.GPLINKS_API_KEY) {
-      const apiUrl = `${process.env.GPLINKS_API_URL}?api=${process.env.GPLINKS_API_KEY}&url=${encodeURIComponent(callbackUrl)}`;
-      const r = await fetch(apiUrl);
-      const data = await r.json();
-      // GPLinks-style response shape: { status: "success", shortenedUrl: "..." }
-      if (data && (data.shortenedUrl || data.short_url)) {
-        finalLink = data.shortenedUrl || data.short_url;
-      }
-    }
-  } catch (err) {
-    console.error('Shortlink provider call failed, falling back to direct callback URL:', err.message);
+  if (!process.env.GPLINKS_API_KEY || !process.env.GPLINKS_API_URL) {
+    console.error('GPLinks not configured — GPLINKS_API_KEY / GPLINKS_API_URL missing.');
+    return res.status(500).json({ error: 'Shortlink service configured nahi hai. Admin ko batao.' });
   }
 
-  res.json({ sessionId, shortlink: finalLink });
+  try {
+    const apiUrl = `${process.env.GPLINKS_API_URL}?api=${process.env.GPLINKS_API_KEY}&url=${encodeURIComponent(callbackUrl)}`;
+    const r = await fetch(apiUrl);
+    const data = await r.json();
+    console.log('GPLinks API response:', JSON.stringify(data));
+
+    const finalLink = data && (data.shortenedUrl || data.short_url);
+    if (!finalLink) {
+      // IMPORTANT: never silently fall back to the raw internal callback
+      // URL here — that would let anyone skip the shortlink/ads entirely
+      // (zero-second "support complete" for free). Fail loudly instead.
+      console.error('GPLinks did not return a shortened URL:', JSON.stringify(data));
+      return res.status(502).json({ error: 'Shortlink generate nahi ho paya. GPLinks key/URL check karo (Render logs me detail hai).' });
+    }
+    res.json({ sessionId, shortlink: finalLink });
+  } catch (err) {
+    console.error('GPLinks API call failed:', err.message);
+    return res.status(502).json({ error: 'Shortlink service se connect nahi ho paya. Thodi der baad try karo.' });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -160,28 +160,28 @@ app.post('/api/support/start', async (req, res) => {
 
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
 
-  if (!process.env.GPLINKS_API_KEY || !process.env.GPLINKS_API_URL) {
-    console.error('GPLinks not configured — GPLINKS_API_KEY / GPLINKS_API_URL missing.');
-    return res.status(500).json({ error: 'Shortlink service configured nahi hai. Admin ko batao.' });
-  }
-
   try {
-    const apiUrl = `${process.env.GPLINKS_API_URL}?api=${process.env.GPLINKS_API_KEY}&url=${encodeURIComponent(callbackUrl)}`;
+    const cfg = await getShortlinkConfig();
+    if (!cfg.apiKey || !cfg.apiUrl) {
+      console.error('Shortlink provider not configured (no env vars, no /setshortlink config).');
+      return res.status(500).json({ error: 'Shortlink service configured nahi hai. Owner ko /setshortlink use karne bolo.' });
+    }
+    const apiUrl = `${cfg.apiUrl}?api=${cfg.apiKey}&url=${encodeURIComponent(callbackUrl)}`;
     const r = await fetch(apiUrl);
     const data = await r.json();
-    console.log('GPLinks API response:', JSON.stringify(data));
+    console.log('Shortlink API response:', JSON.stringify(data));
 
     const finalLink = data && (data.shortenedUrl || data.short_url);
     if (!finalLink) {
       // IMPORTANT: never silently fall back to the raw internal callback
       // URL here — that would let anyone skip the shortlink/ads entirely
       // (zero-second "support complete" for free). Fail loudly instead.
-      console.error('GPLinks did not return a shortened URL:', JSON.stringify(data));
-      return res.status(502).json({ error: 'Shortlink generate nahi ho paya. GPLinks key/URL check karo (Render logs me detail hai).' });
+      console.error('Shortlink provider did not return a shortened URL:', JSON.stringify(data));
+      return res.status(502).json({ error: 'Shortlink generate nahi ho paya. Provider key/URL check karo (Render logs me detail hai).' });
     }
     res.json({ sessionId, shortlink: finalLink });
   } catch (err) {
-    console.error('GPLinks API call failed:', err.message);
+    console.error('Shortlink API call failed:', err.message);
     return res.status(502).json({ error: 'Shortlink service se connect nahi ho paya. Thodi der baad try karo.' });
   }
 });
@@ -368,6 +368,132 @@ async function checkIsAdmin(userId) {
   } catch (e) { return false; }
 }
 
+// ---------------------------------------------------------------------------
+// SHORTLINK PROVIDER — configurable live via bot DM (no redeploy needed).
+// Works with any GPLinks-style provider: GET {apiUrl}?api={key}&url={target}
+// returning JSON with a "shortenedUrl" or "short_url" field.
+// ---------------------------------------------------------------------------
+const KNOWN_PROVIDERS = {
+  gplinks: 'https://api.gplinks.com/api',
+};
+
+async function getShortlinkConfig() {
+  try {
+    const raw = await redisCommand(['GET', 'shortlink_config']);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* fall through to env-based default below */ }
+  return {
+    provider: 'gplinks',
+    apiKey: process.env.GPLINKS_API_KEY || '',
+    apiUrl: process.env.GPLINKS_API_URL || KNOWN_PROVIDERS.gplinks,
+  };
+}
+async function setShortlinkConfig(cfg) {
+  await redisCommand(['SET', 'shortlink_config', JSON.stringify(cfg)]);
+}
+
+// ---------------------------------------------------------------------------
+// GLOBAL FREE-PASS — temporarily suspends the "must support" requirement
+// everywhere that checks it (community chat gate + the /api/support/status-check
+// endpoint that a connected content-bot relies on), without touching anyone's
+// individual streak/support data.
+// ---------------------------------------------------------------------------
+function parseDuration(str) {
+  const m = /^(\d+)\s*(d|h|m)$/i.exec((str || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const unit = m[2].toLowerCase();
+  const mult = unit === 'd' ? 24 * 60 * 60 * 1000 : unit === 'h' ? 60 * 60 * 1000 : 60 * 1000;
+  return n * mult;
+}
+async function isGlobalFreePassActive() {
+  try {
+    const until = await redisCommand(['GET', 'global_free_pass_until']);
+    return !!until && Date.now() < parseInt(until, 10);
+  } catch (e) { return false; }
+}
+async function getGlobalFreePassUntil() {
+  try {
+    const until = await redisCommand(['GET', 'global_free_pass_until']);
+    return until ? parseInt(until, 10) : null;
+  } catch (e) { return null; }
+}
+function formatRemaining(ms) {
+  if (ms <= 0) return '0m';
+  const totalMin = Math.ceil(ms / 60000);
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  return [d ? d + 'd' : '', h ? h + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ') || '0m';
+}
+
+// ---------------------------------------------------------------------------
+// Handles owner/admin-only DM commands. Returns true if the message WAS one
+// of these commands (caller should stop processing), false otherwise.
+// ---------------------------------------------------------------------------
+async function handleOwnerCommand(text, userId) {
+  const lower = text.toLowerCase();
+
+  if (lower === '/shortlinkstatus') {
+    const cfg = await getShortlinkConfig();
+    const maskedKey = cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-3) : '(not set)';
+    await tgSendText(userId, `🔗 Current Shortlink Provider\n\nProvider: ${cfg.provider}\nAPI URL: ${cfg.apiUrl}\nAPI Key: ${maskedKey}`);
+    return true;
+  }
+
+  if (lower.startsWith('/setshortlink')) {
+    // /setshortlink <provider> <apiKey> [apiUrl]
+    const parts = text.split(/\s+/).slice(1);
+    if (parts.length < 2) {
+      await tgSendText(userId, `Usage: /setshortlink <provider> <apiKey> [apiUrl]\n\nExample (GPLinks): /setshortlink gplinks YOUR_API_KEY\nExample (any other provider): /setshortlink vplink YOUR_API_KEY https://api.vplink.in/api`);
+      return true;
+    }
+    const [provider, apiKey, customUrl] = parts;
+    const apiUrl = customUrl || KNOWN_PROVIDERS[provider.toLowerCase()];
+    if (!apiUrl) {
+      await tgSendText(userId, `❌ '${provider}' ka API URL pata nahi hai — poora URL bhi daalo: /setshortlink ${provider} ${apiKey} https://api.example.com/api`);
+      return true;
+    }
+    await setShortlinkConfig({ provider: provider.toLowerCase(), apiKey, apiUrl });
+    await tgSendText(userId, `✅ Shortlink provider update ho gaya!\n\nProvider: ${provider}\nAPI URL: ${apiUrl}\n\nAgle support-attempt se yahi use hoga — koi redeploy nahi chahiye.`);
+    return true;
+  }
+
+  if (lower.startsWith('/freepass')) {
+    const arg = text.split(/\s+/)[1];
+    if (!arg) {
+      await tgSendText(userId, `Usage: /freepass <duration>  ya  /freepass off\n\nExamples: /freepass 1d  (1 din)\n/freepass 12h  (12 ghante)\n/freepass 30m  (30 minute)\n/freepass off  (turant band karo)`);
+      return true;
+    }
+    if (arg.toLowerCase() === 'off') {
+      await redisCommand(['DEL', 'global_free_pass_until']);
+      await tgSendText(userId, `✅ Free-pass band kar diya — support requirement wapas ON hai.`);
+      return true;
+    }
+    const durationMs = parseDuration(arg);
+    if (!durationMs) {
+      await tgSendText(userId, `❌ Format samajh nahi aaya. Try: /freepass 1d ya /freepass 12h ya /freepass 30m`);
+      return true;
+    }
+    const until = Date.now() + durationMs;
+    await redisCommand(['SET', 'global_free_pass_until', String(until)]);
+    await tgSendText(userId, `✅ Free-pass ON kar diya — agle ${formatRemaining(durationMs)} tak KISI KO bhi support karne ki zaroorat nahi hai. Community chat aur connected content-bot dono is dauran kuch nahi poochenge.\n\nJaldi band karna ho toh: /freepass off`);
+    return true;
+  }
+
+  if (lower === '/freepassstatus') {
+    const until = await getGlobalFreePassUntil();
+    if (!until || Date.now() >= until) {
+      await tgSendText(userId, `ℹ️ Abhi koi free-pass active nahi hai — support requirement normal hai.`);
+    } else {
+      await tgSendText(userId, `✅ Free-pass active hai — ${formatRemaining(until - Date.now())} baaki hai.`);
+    }
+    return true;
+  }
+
+  return false;
+}
+
 // Cooldown window — must match the frontend's COOLDOWN_MS (12 hours in production).
 const SUPPORT_WINDOW_MS = 12 * 60 * 60 * 1000;
 
@@ -383,6 +509,11 @@ function hoursAgo(ts) {
 async function buildWelcomeText(userId) {
   let supporter = null;
   try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); supporter = raw ? JSON.parse(raw) : null; } catch (e) {}
+
+  if (await isGlobalFreePassActive()) {
+    const until = await getGlobalFreePassUntil();
+    return `🎉 Abhi free-pass chal raha hai — koi support nahi chahiye!\n⏳ ${formatRemaining(until - Date.now())} baaki hai.`;
+  }
 
   if (!isCurrentlyActive(supporter)) {
     const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
@@ -938,6 +1069,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
     if (msg.chat.type === 'private') {
       const userId = msg.from.id;
       const isAdmin = await checkIsAdmin(userId);
+
+      // ---- Owner/admin-only bot commands: shortlink provider + free-pass ----
+      if (isAdmin && msg.text && await handleOwnerCommand(msg.text.trim(), userId)) return;
+
       const text = await buildWelcomeText(userId);
       await tgSend(userId, text, mainMenuKeyboard(isAdmin));
       return;
@@ -1045,6 +1180,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
         if (d.ok) isAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
       } catch (e) { /* assume not admin on failure */ }
       if (isAdmin) return;
+      if (await isGlobalFreePassActive()) return;
 
       let supporter = null;
       try {
@@ -1118,9 +1254,12 @@ app.get('/api/support/status-check', async (req, res) => {
     adminPass = !!(await redisCommand(['GET', 'admin_pass:tg_' + telegramId]));
   } catch (e) { /* ignore */ }
 
+  const globalFreePass = await isGlobalFreePassActive();
+
   res.json({
-    active: isCurrentlyActive(supporter),
+    active: isCurrentlyActive(supporter) || globalFreePass,
     adminPass, // true if this admin currently has an active /pass (from the community chat)
+    globalFreePass, // true if the owner has temporarily suspended the support requirement for everyone
     totalDays: supporter ? (supporter.totalDays || 0) : 0,
     streak: supporter ? (supporter.streak || 0) : 0,
     lastSupportAt: supporter ? supporter.lastSupportAt : null

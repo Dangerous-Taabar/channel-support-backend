@@ -1042,13 +1042,15 @@ app.post('/api/telegram/webhook', async (req, res) => {
     const msg = req.body && req.body.message;
     if (!msg || !process.env.TELEGRAM_BOT_TOKEN) return;
 
-    // ---- CONTENT COMMANDS (/tv /phone /filter /search /vault etc.) ----
-    // Checked BEFORE the private-DM welcome menu below, so these still work
-    // when typed in a private chat with the bot.
-    if (msg.text && await handleContentCommand(msg)) return;
+    // ---- CONTENT COMMANDS (/tv /phone /filter /search /vault etc.) — DISABLED ----
+    // Forward Bot owns /tv, /phone, /vault, /grantaccess etc. exclusively now.
+    // Channel Support Bot must never intercept these — it was double-replying
+    // and using its own separate admin-check that didn't recognize real
+    // community admins, causing unwanted "please support" nudges for them.
+    // if (msg.text && await handleContentCommand(msg)) return;
 
-    // ---- CONTENT ADMIN UPLOAD — admin sends a file directly to the bot ----
-    const uploadedMedia = msg.document || msg.photo?.[msg.photo?.length - 1] || msg.video || msg.animation;
+    // ---- CONTENT ADMIN UPLOAD — disabled for the same reason as above ----
+    const uploadedMedia = false && (msg.document || msg.photo?.[msg.photo?.length - 1] || msg.video || msg.animation);
     if (msg.chat.type === 'private' && uploadedMedia && await cbIsAdmin(msg.from.id)) {
       const fileType = msg.document ? 'document' : msg.photo ? 'photo' : msg.video ? 'video' : 'animation';
       const fileName = uploadedMedia.file_name || (msg.caption || '').split('\n')[0] || 'file';
@@ -1193,15 +1195,13 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
         const tag = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
         try {
-          // Reply first (so the joke references their message)...
+          // Just a friendly nudge reply — their own message stays untouched.
           const data = await tgSendMsg({
             reply_to_message_id: msg.message_id,
             text: `${tag} 😄 ${joke}\n\nPehle support karo, phir yahan baat kar sakte ho! 👇`,
             reply_markup: { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] }
           });
-          // ...then delete their message, so they can't keep chatting unsupported.
-          await tgDeleteMsg(msg.message_id);
-          // ...and auto-clean our own nudge reply after 2 minutes too.
+          // Auto-clean our own nudge reply after 2 minutes so the chat stays tidy.
           if (data && data.ok && data.result) {
             setTimeout(() => tgDeleteMsg(data.result.message_id), 2 * 60 * 1000);
           }

@@ -113,6 +113,38 @@ app.post('/api/storage/list', async (req, res) => {
   }
 });
 
+// Batch read — the frontend needs every supporter record to build the
+// leaderboard/dashboard/chart. Fetching them one key at a time meant one
+// HTTP round trip per supporter (100 supporters = 100 requests, and the
+// page got slower as the community grew). MGET returns them all in one.
+app.post('/api/storage/mget', async (req, res) => {
+  try {
+    const { keys } = req.body || {};
+    if (!Array.isArray(keys) || keys.length === 0) return res.json({ values: [] });
+    if (keys.length > 500) return res.status(400).json({ error: 'too many keys' });
+    if (!keys.every(isValidStorageKey)) return res.status(400).json({ error: 'invalid key' });
+    const values = await redisCommand(['MGET', ...keys]);
+    res.json({ values: values || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Health check — used by the admin panel's "Service status" card so an
+// admin can tell at a glance whether the API is up and whether Redis is
+// actually configured, instead of guessing from a blank dashboard.
+app.get('/api/health', async (req, res) => {
+  const out = { ok: true, uptimeSeconds: Math.round(process.uptime()), redis: 'unknown' };
+  try {
+    await redisCommand(['PING']);
+    out.redis = 'ok';
+  } catch (err) {
+    out.ok = false;
+    out.redis = (!UPSTASH_URL || !UPSTASH_TOKEN) ? 'not-configured' : 'error';
+  }
+  res.status(out.ok ? 200 : 503).json(out);
+});
+
 // Session store — persisted in Redis (Upstash) so it survives server
 // restarts/redeploys, and works even if Render spins up a new instance.
 // ---------------------------------------------------------------------------

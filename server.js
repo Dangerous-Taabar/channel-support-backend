@@ -104,6 +104,9 @@ app.post('/api/storage/set', async (req, res) => {
       return res.status(413).json({ error: 'value too large' });
     }
     await redisCommand(['SET', key, value]);
+    // A supporter record just changed (new support, admin edit, etc.) — don't
+    // make the bot's next leaderboard/rank lookup wait out the cache window.
+    if (key.startsWith('supporter:')) invalidateSupportersCache();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -468,15 +471,33 @@ async function buildLeaderboardCard() {
   };
 }
 
+// Cached for a few seconds so a burst of taps on "Top 10" / "My Stats" (or
+// several people opening the leaderboard around the same moment) doesn't
+// each trigger a fresh full scan — only the first request in that window
+// pays the cost, everyone right behind it gets the cached result.
+let _supportersCache = null, _supportersCacheAt = 0;
+const SUPPORTERS_CACHE_MS = 8000;
+
 async function fetchAllSupporters() {
+  if (_supportersCache && (Date.now() - _supportersCacheAt) < SUPPORTERS_CACHE_MS) {
+    return _supportersCache;
+  }
   const keys = await redisCommand(['KEYS', 'supporter:tg_*']);
   let all = [];
-  for (const k of (keys || [])) {
-    const raw = await redisCommand(['GET', k]);
-    if (raw) all.push(JSON.parse(raw));
+  if (keys && keys.length) {
+    // One MGET for every record instead of one GET per supporter — the
+    // previous version did N sequential round trips to Upstash, which is
+    // exactly what made the leaderboard and rank lookups feel slow as the
+    // supporter count grew. This is the same fix already applied to the
+    // website's own batch-read endpoint.
+    const values = await redisCommand(['MGET', ...keys]);
+    (values || []).forEach(raw => { if (raw) { try { all.push(JSON.parse(raw)); } catch (e) {} } });
   }
+  _supportersCache = all;
+  _supportersCacheAt = Date.now();
   return all;
 }
+function invalidateSupportersCache() { _supportersCache = null; }
 
 async function checkIsAdmin(userId) {
   const chatId = process.env.COMMUNITY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
@@ -1470,6 +1491,7 @@ app.post('/api/admin/reset-all-supporters', async (req, res) => {
       await redisCommand(['SET', k, JSON.stringify(rec)]);
       reset++;
     }
+    invalidateSupportersCache();
     res.json({ ok: true, reset });
   } catch (err) {
     res.status(500).json({ error: err.message });

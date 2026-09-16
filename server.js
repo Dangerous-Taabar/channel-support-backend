@@ -76,12 +76,19 @@ const ALLOWED_KEY_PATTERN = /^(profile|admins|settings|branding|admin_audit_log|
 function isValidStorageKey(key) {
   return typeof key === 'string' && key.length <= 120 && ALLOWED_KEY_PATTERN.test(key);
 }
+// auth_epoch is a single global counter used to force everyone's browser to
+// sign out on next load (see /api/admin/force-logout-all below). Reading it
+// is harmless — it's just a number — but only that dedicated, owner-gated
+// endpoint may ever change it, so it stays out of the generic write allowlist.
+function isValidReadOnlyKey(key) {
+  return key === 'auth_epoch';
+}
 const MAX_VALUE_BYTES = 1_500_000; // ~1.5MB — comfortably covers a base64 logo
 
 app.post('/api/storage/get', async (req, res) => {
   try {
     const { key } = req.body || {};
-    if (!isValidStorageKey(key)) return res.status(400).json({ error: 'invalid key' });
+    if (!isValidStorageKey(key) && !isValidReadOnlyKey(key)) return res.status(400).json({ error: 'invalid key' });
     const value = await redisCommand(['GET', key]);
     res.json({ value });
   } catch (err) {
@@ -380,6 +387,87 @@ function backKeyboard() {
   return { inline_keyboard: [[{ text: '🔙 Back to Menu', callback_data: 'menu' }]] };
 }
 
+// ---------------------------------------------------------------------------
+// Shared card builders — used by both the inline-menu buttons (My Stats /
+// Leaderboard) AND the /mystatus /top10 slash commands, so the two entry
+// points can never show different-looking output for the same data.
+// ---------------------------------------------------------------------------
+async function buildMyStatsCard(userId) {
+  let supporter = null;
+  try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); supporter = raw ? JSON.parse(raw) : null; } catch (e) {}
+
+  let text, showSupportBtn = false;
+  if (supporter && supporter.totalDays) {
+    let rank = '-', total = 0;
+    try {
+      const all = await fetchAllSupporters();
+      all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
+      total = all.length;
+      const idx = all.findIndex(s => s.name === supporter.name && s.totalDays === supporter.totalDays && s.streak === supporter.streak);
+      rank = idx >= 0 ? idx + 1 : '-';
+    } catch (e) {}
+
+    const active = isCurrentlyActive(supporter);
+    showSupportBtn = !active;
+    const statusLine = active
+      ? '🟢  <b>Active</b> — aaj ka support ho chuka hai'
+      : `🟡  <b>Expired</b> — ${hoursAgo(supporter.lastSupportAt)} ghante pehle support kiya tha, dobara karo`;
+
+    const premium = isPremiumSupporter(supporter);
+    const toGo = Math.max(0, PREMIUM_STREAK_DAYS - (supporter.streak || 0));
+    const premiumLine = premium
+      ? '👑  <b>Premium unlocked</b> — Forward Bot se premium content chalu hai'
+      : `🔒  Premium ${toGo} din aur (lagataar) — ${streakBar(supporter.streak || 0, PREMIUM_STREAK_DAYS)}`;
+
+    text =
+      `📊  <b>Your Supporter Card</b>\n` +
+      `────────────────────\n` +
+      `${statusLine}\n\n` +
+      `🔥  Streak       <b>${supporter.streak || 0} din</b>\n` +
+      `📅  Lifetime      <b>${supporter.totalDays || 0} din</b>\n` +
+      `🏆  Rank          <b>#${rank}</b> of ${total}\n\n` +
+      `${premiumLine}`;
+  } else {
+    showSupportBtn = true;
+    text =
+      `📊  <b>Your Supporter Card</b>\n` +
+      `────────────────────\n` +
+      `Tumne abhi tak support nahi kiya hai.\n\n` +
+      `Support karke apna naam yahan dekho, streak banao, aur ${PREMIUM_STREAK_DAYS} din lagataar support karke 👑 <b>Premium</b> unlock karo!`;
+  }
+
+  const rows = [[{ text: '🔄 Refresh', callback_data: 'my_stats' }]];
+  if (showSupportBtn) rows.unshift([{ text: '🚀 Support Now', url: process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL }]);
+  rows.push([{ text: '🔙 Back to Menu', callback_data: 'menu' }]);
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+async function buildLeaderboardCard() {
+  let text = `🏆  <b>Top 10 Supporters</b>\n────────────────────\n`;
+  try {
+    const all = await fetchAllSupporters();
+    all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
+    if (!all.length) {
+      text += 'Abhi koi supporter nahi hai — pehla naam tumhara ho sakta hai!';
+    } else {
+      all.slice(0, 10).forEach((s, i) => {
+        const crown = isPremiumSupporter(s) ? ' 👑' : '';
+        text += `${medal(i)}  <b>${esc(s.name || 'Supporter')}</b>${crown}\n` +
+                `     ${s.totalDays || 0} din total  ·  🔥 ${s.streak || 0} streak\n`;
+      });
+    }
+  } catch (e) { text += 'Data load nahi ho paya, dobara try karo.'; }
+  return {
+    text,
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '🔄 Refresh', callback_data: 'leaderboard' }],
+        [{ text: '🔙 Back to Menu', callback_data: 'menu' }],
+      ]
+    }
+  };
+}
+
 async function fetchAllSupporters() {
   const keys = await redisCommand(['KEYS', 'supporter:tg_*']);
   let all = [];
@@ -554,21 +642,33 @@ async function buildWelcomeText(userId) {
       : '';
     return `👋 Abhi support active nahi hai!${staleNote}\n\n${joke}\n\nBas 3 minute ki baat hai — neeche se dekho 👇`;
   }
-  return `✅ Tumhara support abhi active hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n\nThanks for the support! 🙌`;
+  return `✅ Tumhara support abhi active hai!\n🔥 Streak: ${supporter.streak} din\n📅 Total: ${supporter.totalDays} din\n${isPremiumSupporter(supporter) ? '👑 Premium unlocked!' : `🔒 Premium ke liye ${Math.max(0, PREMIUM_STREAK_DAYS - (supporter.streak || 0))} din aur`}\n\nThanks for the support! 🙌`;
 }
 
-function tgSend(chatId, text, replyMarkup) {
+function tgSend(chatId, text, replyMarkup, parseMode) {
   return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
+    body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup, parse_mode: parseMode })
   }).catch(() => {});
 }
 
-function tgEdit(chatId, messageId, text, replyMarkup) {
+function tgEdit(chatId, messageId, text, replyMarkup, parseMode) {
   return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup })
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup, parse_mode: parseMode })
   }).catch(() => {});
+}
+
+// Telegram HTML parse_mode only understands a handful of tags — anything a
+// user's own name contains (&, <, >) has to be escaped or the API rejects
+// the whole message and the bot silently "does nothing".
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function medal(i) { return i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`; }
+function streakBar(streak, goal) {
+  const filled = Math.max(0, Math.min(goal, streak));
+  return '🟩'.repeat(filled) + '⬜'.repeat(Math.max(0, goal - filled));
 }
 
 // =============================================================================
@@ -974,35 +1074,11 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const text = await buildWelcomeText(userId);
         await tgEdit(chatId, messageId, text, mainMenuKeyboard(isAdmin));
       } else if (cb.data === 'my_stats') {
-        let supporter = null;
-        try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); supporter = raw ? JSON.parse(raw) : null; } catch (e) {}
-        let text;
-        if (supporter && supporter.totalDays) {
-          let rank = '-', total = 0;
-          try {
-            const all = await fetchAllSupporters();
-            all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
-            total = all.length;
-            const idx = all.findIndex(s => s.name === supporter.name && s.totalDays === supporter.totalDays && s.streak === supporter.streak);
-            rank = idx >= 0 ? idx + 1 : '-';
-          } catch (e) {}
-          const statusLine = isCurrentlyActive(supporter)
-            ? '✅ Status: Active abhi'
-            : `⚠️ Status: Expired (${hoursAgo(supporter.lastSupportAt)} ghante pehle support kiya tha) — dobara karo!`;
-          text = `📊 Tumhare Stats\n\n${statusLine}\n🔥 Streak: ${supporter.streak} din\n📅 Lifetime Total: ${supporter.totalDays} din\n🏆 Rank: #${rank} of ${total}`;
-        } else {
-          text = `📊 Tumne abhi tak support nahi kiya hai!\n\nSupport karke apna naam yahan dekho 👇`;
-        }
-        await tgEdit(chatId, messageId, text, backKeyboard());
+        const { text, keyboard } = await buildMyStatsCard(userId);
+        await tgEdit(chatId, messageId, text, keyboard, 'HTML');
       } else if (cb.data === 'leaderboard') {
-        let text = '🏆 Top 10 Supporters\n\n';
-        try {
-          const all = await fetchAllSupporters();
-          all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
-          if (!all.length) text += 'Abhi koi supporter nahi hai.';
-          else all.slice(0, 10).forEach((s, i) => { text += `${i + 1}. ${s.name} — ${s.totalDays || 0}d 🔥${s.streak || 0}\n`; });
-        } catch (e) { text += 'Data load nahi ho paya, dobara try karo.'; }
-        await tgEdit(chatId, messageId, text, backKeyboard());
+        const { text, keyboard } = await buildLeaderboardCard();
+        await tgEdit(chatId, messageId, text, keyboard, 'HTML');
       } else if (cb.data === 'community_stats') {
         let totalUsers = 0, supportedCount = 0, activeCount = 0;
         try {
@@ -1106,6 +1182,19 @@ app.post('/api/telegram/webhook', async (req, res) => {
 
       // ---- Owner/admin-only bot commands: shortlink provider + free-pass ----
       if (isAdmin && msg.text && await handleOwnerCommand(msg.text.trim(), userId)) return;
+
+      // ---- Direct slash-command shortcuts for the same cards the menu buttons show ----
+      const cmd = msg.text ? msg.text.trim().toLowerCase() : '';
+      if (/^\/mystatus(@\S+)?$/.test(cmd)) {
+        const { text, keyboard } = await buildMyStatsCard(userId);
+        await tgSend(userId, text, keyboard, 'HTML');
+        return;
+      }
+      if (/^\/top10(@\S+)?$/.test(cmd)) {
+        const { text, keyboard } = await buildLeaderboardCard();
+        await tgSend(userId, text, keyboard, 'HTML');
+        return;
+      }
 
       const text = await buildWelcomeText(userId);
       await tgSend(userId, text, mainMenuKeyboard(isAdmin));
@@ -1296,6 +1385,114 @@ app.get('/api/support/status-check', async (req, res) => {
     streak: supporter ? (supporter.streak || 0) : 0,
     lastSupportAt: supporter ? supporter.lastSupportAt : null
   });
+});
+
+// Minimum consecutive-day streak needed to unlock "premium" — today's new
+// reward tier. Kept as one constant so the bot message, this endpoint, and
+// the dashboard badge can never drift out of sync with each other.
+const PREMIUM_STREAK_DAYS = 7;
+
+function isPremiumSupporter(supporter) {
+  return !!(supporter && (supporter.streak || 0) >= PREMIUM_STREAK_DAYS && isCurrentlyActive(supporter));
+}
+
+// ---------------------------------------------------------------------------
+// PREMIUM CHECK — same shape/auth as /api/support/status-check above, but for
+// the Forward Bot to ask "has this person earned premium?" (7-day streak,
+// still currently active) before handing out premium-only content. A missed
+// day breaks the streak via the normal support flow, so premium status here
+// always self-corrects — no separate flag to keep in sync.
+// ---------------------------------------------------------------------------
+app.get('/api/support/premium-check', async (req, res) => {
+  if (process.env.SUPPORT_API_KEY && req.query.key !== process.env.SUPPORT_API_KEY) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+  const telegramId = req.query.telegramId;
+  if (!telegramId) return res.status(400).json({ error: 'telegramId query param required' });
+
+  let supporter = null;
+  try {
+    const raw = await redisCommand(['GET', 'supporter:tg_' + telegramId]);
+    supporter = raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return res.status(500).json({ error: 'storage error' });
+  }
+
+  const globalFreePass = await isGlobalFreePassActive();
+
+  res.json({
+    premium: isPremiumSupporter(supporter) || globalFreePass,
+    globalFreePass,
+    streak: supporter ? (supporter.streak || 0) : 0,
+    totalDays: supporter ? (supporter.totalDays || 0) : 0,
+    daysToGo: supporter ? Math.max(0, PREMIUM_STREAK_DAYS - (supporter.streak || 0)) : PREMIUM_STREAK_DAYS
+  });
+});
+
+// True only for the one Telegram ID recorded as owner in the 'admins' key.
+// Used to gate the two destructive/broad actions below — resetting every
+// supporter and force-signing-out every open browser session — so they
+// can't be triggered by anyone who merely knows the API shape.
+async function isOwnerId(telegramId) {
+  if (!telegramId) return false;
+  try {
+    const raw = await redisCommand(['GET', 'admins']);
+    if (!raw) return false;
+    const admins = JSON.parse(raw);
+    return String(admins.ownerId) === String(telegramId);
+  } catch (e) {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RESET ALL SUPPORTERS — for launching a new season/system fairly: zeroes
+// every supporter's streak/total-days/support-history in one server-side
+// pass (not 200 individual client requests). Identity (name, username,
+// referral count) is left untouched — only support progress resets.
+// ---------------------------------------------------------------------------
+app.post('/api/admin/reset-all-supporters', async (req, res) => {
+  const { telegramId } = req.body || {};
+  if (!(await isOwnerId(telegramId))) return res.status(403).json({ error: 'Owner only' });
+
+  try {
+    const keys = await redisCommand(['KEYS', 'supporter:*']);
+    let reset = 0;
+    for (const k of (keys || [])) {
+      const raw = await redisCommand(['GET', k]);
+      if (!raw) continue;
+      const rec = JSON.parse(raw);
+      rec.streak = 0;
+      rec.totalDays = 0;
+      rec.supportDates = [];
+      rec.lastSupportAt = null;
+      rec.firstSupportAt = null;
+      await redisCommand(['SET', k, JSON.stringify(rec)]);
+      reset++;
+    }
+    res.json({ ok: true, reset });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// FORCE LOGOUT ALL — bumps a global counter every open tab compares itself
+// against on load/poll. A mismatch means "sign out and reconnect" — used
+// right after a reset so everyone's dashboard reflects the fresh state
+// instead of a stale cached streak from before the reset.
+// ---------------------------------------------------------------------------
+app.post('/api/admin/force-logout-all', async (req, res) => {
+  const { telegramId } = req.body || {};
+  if (!(await isOwnerId(telegramId))) return res.status(403).json({ error: 'Owner only' });
+
+  try {
+    const next = String(Date.now());
+    await redisCommand(['SET', 'auth_epoch', next]);
+    res.json({ ok: true, epoch: next });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/', (req, res) => res.send('Channel Support backend is running.'));

@@ -445,26 +445,39 @@ async function buildMyStatsCard(userId) {
   return { text, keyboard: { inline_keyboard: rows } };
 }
 
-async function buildLeaderboardCard() {
-  let text = `🏆  <b>Top 10 Supporters</b>\n────────────────────\n`;
+async function buildLeaderboardCard(period) {
+  period = period || 'all';
+  const labels = { all: 'All-time', week: 'Is Hafte', month: 'Is Mahine' };
+  let text = `🏆  <b>Top 10 Supporters</b>  ·  ${labels[period]}\n────────────────────\n`;
   try {
     const all = await fetchAllSupporters();
-    all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
-    if (!all.length) {
-      text += 'Abhi koi supporter nahi hai — pehla naam tumhara ho sakta hai!';
+    const scored = all
+      .map(s => ({ s, score: periodScore(s, period) }))
+      .filter(x => period === 'all' || x.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (!scored.length) {
+      text += period === 'all'
+        ? 'Abhi koi supporter nahi hai — pehla naam tumhara ho sakta hai!'
+        : 'Is period me abhi koi support nahi hai — sabse pehle tum ban sakte ho!';
     } else {
-      all.slice(0, 10).forEach((s, i) => {
+      const unit = period === 'all' ? 'din total' : period === 'week' ? 'is hafte' : 'is mahine';
+      scored.slice(0, 10).forEach(({ s, score }, i) => {
         const crown = isPremiumSupporter(s) ? ' 👑' : '';
+        const count = period === 'all' ? (s.totalDays || 0) : score;
         text += `${medal(i)}  <b>${esc(s.name || 'Supporter')}</b>${crown}\n` +
-                `     ${s.totalDays || 0} din total  ·  🔥 ${s.streak || 0} streak\n`;
+                `     ${count} ${unit}  ·  🔥 ${s.streak || 0} streak\n`;
       });
     }
   } catch (e) { text += 'Data load nahi ho paya, dobara try karo.'; }
+
+  const per = (p, label) => ({ text: (p === period ? '• ' : '') + label, callback_data: 'leaderboard:' + p });
   return {
     text,
     keyboard: {
       inline_keyboard: [
-        [{ text: '🔄 Refresh', callback_data: 'leaderboard' }],
+        [per('all', 'All-time'), per('week', 'Is Hafte'), per('month', 'Is Mahine')],
+        [{ text: '🔄 Refresh', callback_data: 'leaderboard:' + period }],
         [{ text: '🔙 Back to Menu', callback_data: 'menu' }],
       ]
     }
@@ -498,6 +511,35 @@ async function fetchAllSupporters() {
   return all;
 }
 function invalidateSupportersCache() { _supportersCache = null; }
+
+/* ---- Weekly / monthly windows — mirrors the same logic in index.html so
+   the bot's "/top10 — is hafte" and the website's "Is hafte" tab always
+   agree on exactly which day the week/month flipped, regardless of the
+   server's own timezone (Render runs in UTC). Nothing needs to be reset by
+   hand — once the calendar rolls over, the window itself has moved. */
+function istNow() { return new Date(Date.now() + 5.5 * 60 * 60 * 1000); }
+function istDayKeyOf(d) { return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0'); }
+function weekKeyOf(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = (dt.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  dt.setUTCDate(dt.getUTCDate() - dow);
+  return istDayKeyOf(dt);
+}
+function currentWeekKey() {
+  const now = istNow();
+  const dow = (now.getUTCDay() + 6) % 7;
+  now.setUTCDate(now.getUTCDate() - dow);
+  return istDayKeyOf(now);
+}
+function currentMonthKey() { const n = istNow(); return n.getUTCFullYear() + '-' + String(n.getUTCMonth() + 1).padStart(2, '0'); }
+function countForWeek(supportDates) { const cur = currentWeekKey(); return (supportDates || []).filter(ds => weekKeyOf(ds) === cur).length; }
+function countForMonth(supportDates) { const cur = currentMonthKey(); return (supportDates || []).filter(ds => ds.slice(0, 7) === cur).length; }
+function periodScore(s, period) {
+  if (period === 'week') return countForWeek(s.supportDates);
+  if (period === 'month') return countForMonth(s.supportDates);
+  return s.totalDays || 0;
+}
 
 async function checkIsAdmin(userId) {
   const chatId = process.env.COMMUNITY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
@@ -1097,8 +1139,9 @@ app.post('/api/telegram/webhook', async (req, res) => {
       } else if (cb.data === 'my_stats') {
         const { text, keyboard } = await buildMyStatsCard(userId);
         await tgEdit(chatId, messageId, text, keyboard, 'HTML');
-      } else if (cb.data === 'leaderboard') {
-        const { text, keyboard } = await buildLeaderboardCard();
+      } else if (cb.data === 'leaderboard' || cb.data.startsWith('leaderboard:')) {
+        const period = cb.data.includes(':') ? cb.data.split(':')[1] : 'all';
+        const { text, keyboard } = await buildLeaderboardCard(period);
         await tgEdit(chatId, messageId, text, keyboard, 'HTML');
       } else if (cb.data === 'community_stats') {
         let totalUsers = 0, supportedCount = 0, activeCount = 0;
@@ -1472,14 +1515,33 @@ async function isOwnerId(telegramId) {
 // pass (not 200 individual client requests). Identity (name, username,
 // referral count) is left untouched — only support progress resets.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// RESET ALL SUPPORTERS — for launching a new season/system fairly.
+//
+// Two different things happen depending on the key:
+//  - supporter:tg_<id>  → a real, Telegram-verified account. RESET (streak/
+//    totalDays/history back to zero) but keep the record — name, username,
+//    referral count survive, and the person doesn't need to reconnect.
+//  - anything else (e.g. supporter:u_xxxxx) → left over from the old
+//    "just type your name" system, before Telegram verification existed.
+//    These aren't tied to a real re-connectable account (which is also how
+//    the same person ended up with several of them — a new one was created
+//    every time local storage was cleared or they used a different
+//    browser/device). DELETE these outright rather than reset them.
+// ---------------------------------------------------------------------------
 app.post('/api/admin/reset-all-supporters', async (req, res) => {
   const { telegramId } = req.body || {};
   if (!(await isOwnerId(telegramId))) return res.status(403).json({ error: 'Owner only' });
 
   try {
     const keys = await redisCommand(['KEYS', 'supporter:*']);
-    let reset = 0;
+    let reset = 0, purged = 0;
     for (const k of (keys || [])) {
+      if (!/^supporter:tg_\d+$/.test(k)) {
+        await redisCommand(['DEL', k]);
+        purged++;
+        continue;
+      }
       const raw = await redisCommand(['GET', k]);
       if (!raw) continue;
       const rec = JSON.parse(raw);
@@ -1492,7 +1554,7 @@ app.post('/api/admin/reset-all-supporters', async (req, res) => {
       reset++;
     }
     invalidateSupportersCache();
-    res.json({ ok: true, reset });
+    res.json({ ok: true, reset, purged });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

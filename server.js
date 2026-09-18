@@ -1475,7 +1475,13 @@ app.get('/api/support/status-check', async (req, res) => {
 const PREMIUM_STREAK_DAYS = 7;
 
 function isPremiumSupporter(supporter) {
-  return !!(supporter && (supporter.streak || 0) >= PREMIUM_STREAK_DAYS && isCurrentlyActive(supporter));
+  if (!supporter) return false;
+  const streakPremium = (supporter.streak || 0) >= PREMIUM_STREAK_DAYS && isCurrentlyActive(supporter);
+  // Set by the Forward Bot's weekly-winner reward (POST /api/admin/grant-weekly-premium)
+  // — independent of streak, so a winner shows Premium everywhere (site badge,
+  // bot crown, Forward Bot content) even if their daily streak lapses.
+  const weeklyPremium = supporter.weeklyPremiumUntil && supporter.weeklyPremiumUntil > Date.now();
+  return !!(streakPremium || weeklyPremium);
 }
 
 // ---------------------------------------------------------------------------
@@ -1545,6 +1551,39 @@ app.get('/api/support/weekly-winner', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// GRANT WEEKLY PREMIUM — the write-side companion to weekly-winner above.
+// The Forward Bot calls this once per winner right after it grants them
+// local access, so the site (dashboard badge, leaderboard crown, admin
+// table) shows the same Premium status instead of only the Forward Bot
+// knowing about it. Same shared-secret trust as the other SUPPORT_API_KEY
+// endpoints — this is bot-to-bot, not owner-to-panel, so it's keyed the
+// same way as premium-check/status-check rather than the owner-telegramId
+// checks used by the Danger Zone actions.
+// ---------------------------------------------------------------------------
+app.post('/api/admin/grant-weekly-premium', async (req, res) => {
+  const { telegramId, days, key } = req.body || {};
+  if (process.env.SUPPORT_API_KEY && key !== process.env.SUPPORT_API_KEY) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+  const grantDays = Number(days);
+  if (!telegramId || !grantDays || grantDays <= 0) {
+    return res.status(400).json({ error: 'telegramId and a positive days value are required' });
+  }
+  try {
+    const recKey = 'supporter:tg_' + telegramId;
+    const raw = await redisCommand(['GET', recKey]);
+    if (!raw) return res.status(404).json({ error: 'supporter not found' });
+    const rec = JSON.parse(raw);
+    rec.weeklyPremiumUntil = Date.now() + grantDays * 86400000;
+    await redisCommand(['SET', recKey, JSON.stringify(rec)]);
+    invalidateSupportersCache();
+    res.json({ ok: true, until: rec.weeklyPremiumUntil });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // True only for the one Telegram ID recorded as owner in the 'admins' key.
 // Used to gate the two destructive/broad actions below — resetting every
 // supporter and force-signing-out every open browser session — so they
@@ -1602,6 +1641,7 @@ app.post('/api/admin/reset-all-supporters', async (req, res) => {
       rec.supportDates = [];
       rec.lastSupportAt = null;
       rec.firstSupportAt = null;
+      rec.weeklyPremiumUntil = null;
       await redisCommand(['SET', k, JSON.stringify(rec)]);
       reset++;
     }

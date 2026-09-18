@@ -411,7 +411,7 @@ async function buildMyStatsCard(userId) {
       const all = await fetchAllSupporters();
       all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
       total = all.length;
-      const idx = all.findIndex(s => s.name === supporter.name && s.totalDays === supporter.totalDays && s.streak === supporter.streak);
+      const idx = all.findIndex(s => s._key === 'supporter:tg_' + userId);
       rank = idx >= 0 ? idx + 1 : '-';
     } catch (e) {}
 
@@ -509,7 +509,10 @@ async function fetchAllSupporters() {
     // supporter count grew. This is the same fix already applied to the
     // website's own batch-read endpoint.
     const values = await redisCommand(['MGET', ...keys]);
-    (values || []).forEach(raw => { if (raw) { try { all.push(JSON.parse(raw)); } catch (e) {} } });
+    (values || []).forEach((raw, i) => {
+      if (!raw) return;
+      try { const rec = JSON.parse(raw); rec._key = keys[i]; all.push(rec); } catch (e) {}
+    });
   }
   _supportersCache = all;
   _supportersCacheAt = Date.now();
@@ -536,6 +539,16 @@ function currentWeekKey() {
   const dow = (now.getUTCDay() + 6) % 7;
   now.setUTCDate(now.getUTCDate() - dow);
   return istDayKeyOf(now);
+}
+/** The Monday of the week that JUST ENDED — used the moment a new week
+ *  starts to figure out "who won last week", since currentWeekKey() at
+ *  that point only has 0-1 days of data in it. */
+function previousWeekKey() {
+  const cur = currentWeekKey();
+  const [y, m, d] = cur.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 7);
+  return istDayKeyOf(dt);
 }
 function currentMonthKey() { const n = istNow(); return n.getUTCFullYear() + '-' + String(n.getUTCMonth() + 1).padStart(2, '0'); }
 function countForWeek(supportDates) { const cur = currentWeekKey(); return (supportDates || []).filter(ds => weekKeyOf(ds) === cur).length; }
@@ -1496,6 +1509,40 @@ app.get('/api/support/premium-check', async (req, res) => {
     totalDays: supporter ? (supporter.totalDays || 0) : 0,
     daysToGo: supporter ? Math.max(0, PREMIUM_STREAK_DAYS - (supporter.streak || 0)) : PREMIUM_STREAK_DAYS
   });
+});
+
+// ---------------------------------------------------------------------------
+// WEEKLY WINNER — read-only, same SUPPORT_API_KEY auth as the checks above.
+// The Forward Bot polls this once a week (it runs on its own machine, so our
+// backend can't "push" to it — this is what it pulls instead) to find out
+// who most supported the channel in the week that JUST ended, then grants
+// them its own reward locally (e.g. temporary premium access) however it
+// likes. We only report the result; the Forward Bot owns what "the prize" is.
+// ---------------------------------------------------------------------------
+app.get('/api/support/weekly-winner', async (req, res) => {
+  if (process.env.SUPPORT_API_KEY && req.query.key !== process.env.SUPPORT_API_KEY) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+  try {
+    const week = previousWeekKey();
+    const winnerCount = Math.max(1, Math.min(10, parseInt(req.query.count || '1', 10) || 1));
+
+    const all = await fetchAllSupporters();
+    const scored = all
+      .map(s => ({
+        telegramId: (s._key || '').replace('supporter:tg_', ''),
+        name: s.name || 'Supporter',
+        username: s.username || '',
+        score: (s.supportDates || []).filter(ds => weekKeyOf(ds) === week).length
+      }))
+      .filter(x => x.telegramId && x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, winnerCount);
+
+    res.json({ week, winners: scored });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // True only for the one Telegram ID recorded as owner in the 'admins' key.

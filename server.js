@@ -250,19 +250,24 @@ app.get('/api/support/callback', async (req, res) => {
   }
 
   // ---- Basic bypass-tool defense ----
-  // A real completion arrives here as a browser redirect FROM the shortlink
-  // provider's own domain — so the Referer header must be present AND point
-  // to GPLinks. Anyone who opens this link directly (pasted, new tab, curl,
-  // bypass-bot) sends no Referer at all, or the wrong one — both are
-  // blocked. Note: a small number of privacy-hardened browsers strip
-  // Referer even on legitimate navigation, which would false-positive a
-  // real supporter — an accepted trade-off for real bypass protection.
-  const referer = (req.headers['referer'] || req.headers['referrer'] || '').toLowerCase();
+  // The session ID + signed token + minimum-dwell-time checks above already
+  // defeat generic bypass tools (they'd need to know this exact, one-time
+  // URL ahead of time, which they can't). This extra check only screens out
+  // scripts/bots by their User-Agent.
+  //
+  // A previous version also required the Referer header to contain
+  // "gplinks", on the theory that a real completion always arrives as a
+  // browser redirect from GPLinks' own domain. In practice this blocked
+  // most REAL supporters, not bypass tools: Telegram's in-app browser, iOS
+  // Safari, and most ad-blockers now strip or omit the Referer header by
+  // default as a privacy measure, GPLinks' final "Get Link" step, and any
+  // ad-interstitial GPLinks shows along the way can change what Referer (if
+  // any) arrives here. So the referer requirement is intentionally NOT
+  // enforced — it was the actual cause of "sab support nahi kar pa rahe".
   const userAgent = (req.headers['user-agent'] || '').toLowerCase();
   const looksLikeScript = /python|curl|wget|axios|okhttp|go-http-client|node-fetch|postman|scrapy/.test(userAgent);
-  const cameFromShortlinkProvider = referer.includes('gplinks');
 
-  if (looksLikeScript || !cameFromShortlinkProvider) {
+  if (looksLikeScript) {
     return res.status(404).send(`
       <html><body style="background:#08050f;color:#fff;font-family:sans-serif;text-align:center;padding-top:60px;">
         <h2>404 — Not Found</h2>

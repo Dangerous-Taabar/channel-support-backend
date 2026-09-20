@@ -57,7 +57,7 @@ const MIN_DWELL_SECONDS = parseInt(process.env.MIN_DWELL_SECONDS || '25', 10);
 // what GPLinks would have taken anyway, there's nothing left to save by
 // bypassing it. Tune via CONFIRM_DELAY_SECONDS to whatever GPLinks itself
 // normally takes for your ad flow.
-const CONFIRM_DELAY_SECONDS = parseInt(process.env.CONFIRM_DELAY_SECONDS || '35', 10);
+const CONFIRM_DELAY_SECONDS = parseInt(process.env.CONFIRM_DELAY_SECONDS || '15', 10);
 
 // ---------------------------------------------------------------------------
 // SHARED STORAGE (Upstash Redis) — this is what actually makes data visible

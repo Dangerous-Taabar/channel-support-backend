@@ -49,8 +49,15 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'dev_secret_change_me';
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
 const MIN_DWELL_SECONDS = parseInt(process.env.MIN_DWELL_SECONDS || '25', 10);
 // Second gate, AFTER the shortlink leg, entirely on our own domain — see the
-// callback/confirm endpoints below for why this exists.
-const CONFIRM_DELAY_SECONDS = parseInt(process.env.CONFIRM_DELAY_SECONDS || '6', 10);
+// callback/confirm endpoints below for why this exists. NOTE: 6s (the old
+// default) was too short to matter — any human, bypass-bot or not, waits out
+// 6 seconds without noticing. The real point of this gate isn't to be
+// unautomatable (a person still just sits and waits, same as before); it's
+// to make bypassing GPLinks pointless: once our OWN wait matches or exceeds
+// what GPLinks would have taken anyway, there's nothing left to save by
+// bypassing it. Tune via CONFIRM_DELAY_SECONDS to whatever GPLinks itself
+// normally takes for your ad flow.
+const CONFIRM_DELAY_SECONDS = parseInt(process.env.CONFIRM_DELAY_SECONDS || '35', 10);
 
 // ---------------------------------------------------------------------------
 // SHARED STORAGE (Upstash Redis) — this is what actually makes data visible
@@ -742,6 +749,51 @@ async function handleOwnerCommand(text, userId) {
     return true;
   }
 
+  if (lower.startsWith('/testcooldown')) {
+    // Sirf CALLER (admin) ke apne account ka support-cooldown chhota karta
+    // hai — 12h wait kiye bina baar-baar support→streak→cooldown poora
+    // cycle test kar sako. Baaki sabka cooldown normal 12h hi rehta hai.
+    const arg = text.split(/\s+/)[1];
+    const key = 'supporter:tg_' + userId;
+
+    if (!arg) {
+      await tgSendText(userId, `Usage: /testcooldown <duration>  ya  /testcooldown off\\n\\nSirf TUMHARE apne account ka cooldown chhota kar deta hai (testing ke liye) — baaki sabka 12 ghante wala hi rehta hai.\\n\\nExamples: /testcooldown 2m\\n/testcooldown off  (wapas normal 12h)`);
+      return true;
+    }
+
+    if (arg.toLowerCase() === 'off') {
+      try {
+        const raw = await redisCommand(['GET', key]);
+        if (raw) {
+          const rec = JSON.parse(raw);
+          delete rec.testCooldownMs;
+          await redisCommand(['SET', key, JSON.stringify(rec)]);
+          invalidateSupportersCache();
+        }
+      } catch (e) {}
+      await tgSendText(userId, `✅ Test-cooldown band — ab tumhara bhi normal 12 ghante wala cooldown hai.`);
+      return true;
+    }
+
+    const durationMs = parseDuration(arg);
+    if (!durationMs) {
+      await tgSendText(userId, `❌ Format samajh nahi aaya. Try: /testcooldown 2m ya /testcooldown 1h`);
+      return true;
+    }
+
+    try {
+      const raw = await redisCommand(['GET', key]);
+      const rec = raw ? JSON.parse(raw) : { name: 'Admin', streak: 0, totalDays: 0, supportDates: [], lastSupportAt: null, firstSupportAt: null };
+      rec.testCooldownMs = durationMs;
+      await redisCommand(['SET', key, JSON.stringify(rec)]);
+      invalidateSupportersCache();
+      await tgSendText(userId, `✅ Sirf tumhare liye cooldown ${formatRemaining(durationMs)} kar diya — support complete karke turant (${formatRemaining(durationMs)} baad) dobara test kar sakte ho.\\n\\nBand karne ke liye: /testcooldown off`);
+    } catch (e) {
+      await tgSendText(userId, `❌ Save nahi ho paya — dobara try karo.`);
+    }
+    return true;
+  }
+
   return false;
 }
 
@@ -749,7 +801,12 @@ async function handleOwnerCommand(text, userId) {
 const SUPPORT_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 function isCurrentlyActive(supporter) {
-  return !!(supporter && supporter.lastSupportAt && (Date.now() - supporter.lastSupportAt) < SUPPORT_WINDOW_MS);
+  if (!supporter || !supporter.lastSupportAt) return false;
+  // Per-account override, set via /testcooldown — lets ONE admin test the
+  // full support→streak→cooldown cycle in minutes instead of real 12h,
+  // without touching the real cooldown for anyone else.
+  const window = supporter.testCooldownMs || SUPPORT_WINDOW_MS;
+  return (Date.now() - supporter.lastSupportAt) < window;
 }
 
 function hoursAgo(ts) {

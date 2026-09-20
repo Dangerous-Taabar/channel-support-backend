@@ -47,7 +47,10 @@ app.use(cors({
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev_secret_change_me';
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
-const MIN_DWELL_SECONDS = parseInt(process.env.MIN_DWELL_SECONDS || '15', 10);
+const MIN_DWELL_SECONDS = parseInt(process.env.MIN_DWELL_SECONDS || '25', 10);
+// Second gate, AFTER the shortlink leg, entirely on our own domain — see the
+// callback/confirm endpoints below for why this exists.
+const CONFIRM_DELAY_SECONDS = parseInt(process.env.CONFIRM_DELAY_SECONDS || '6', 10);
 
 // ---------------------------------------------------------------------------
 // SHARED STORAGE (Upstash Redis) — this is what actually makes data visible
@@ -250,20 +253,15 @@ app.get('/api/support/callback', async (req, res) => {
   }
 
   // ---- Basic bypass-tool defense ----
-  // The session ID + signed token + minimum-dwell-time checks above already
-  // defeat generic bypass tools (they'd need to know this exact, one-time
-  // URL ahead of time, which they can't). This extra check only screens out
-  // scripts/bots by their User-Agent.
-  //
-  // A previous version also required the Referer header to contain
-  // "gplinks", on the theory that a real completion always arrives as a
-  // browser redirect from GPLinks' own domain. In practice this blocked
-  // most REAL supporters, not bypass tools: Telegram's in-app browser, iOS
-  // Safari, and most ad-blockers now strip or omit the Referer header by
-  // default as a privacy measure, GPLinks' final "Get Link" step, and any
-  // ad-interstitial GPLinks shows along the way can change what Referer (if
-  // any) arrives here. So the referer requirement is intentionally NOT
-  // enforced — it was the actual cause of "sab support nahi kar pa rahe".
+  // The session ID + signed token + minimum-dwell-time checks above defeat
+  // generic bypass tools that only know how to jump to a fixed final URL.
+  // They do NOT defeat a "link-resolver" bot that a person pastes the real
+  // shortlink into: that kind of bot actually visits the shortlink provider
+  // itself (often from its own server, faster than a human would need to),
+  // then hands back the genuine resulting URL — which still carries a valid
+  // signature and a real elapsed time, so the checks above pass either way.
+  // We can't tell that apart from here; the second gate below (CONFIRM) is
+  // what actually raises the bar against that pattern — see its comment.
   const userAgent = (req.headers['user-agent'] || '').toLowerCase();
   const looksLikeScript = /python|curl|wget|axios|okhttp|go-http-client|node-fetch|postman|scrapy/.test(userAgent);
 
@@ -274,6 +272,58 @@ app.get('/api/support/callback', async (req, res) => {
         <p>Steps complete karke hi is link tak pahunch sakte ho.<br>Seedha yeh link kholna allowed nahi hai — bahut jaldi aa gaye ho 😉</p>
       </body></html>
     `);
+  }
+
+  // Don't credit yet — only record that the shortlink leg passed, and send
+  // the browser to a short confirmation step hosted on OUR OWN domain.
+  record.gplinksAt = Date.now();
+  await sessionSet(session, record);
+
+  const confirmUrl = `${PUBLIC_BASE_URL}/api/support/confirm?session=${session}&token=${token}`;
+  res.send(`
+    <html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+    <body style="background:#08050f;color:#fff;font-family:sans-serif;text-align:center;padding-top:60px;">
+      <h2>✅ Almost done!</h2>
+      <p>Ek aakhri step — button ${CONFIRM_DELAY_SECONDS} second me apne aap ready ho jayega.</p>
+      <a id="go" href="${confirmUrl}" style="display:inline-block;margin-top:18px;padding:13px 26px;border-radius:10px;
+        background:#3a3550;color:#8a8299;text-decoration:none;font-weight:600;pointer-events:none;transition:background .2s,color .2s;">
+        Wait… <span id="n">${CONFIRM_DELAY_SECONDS}</span>s
+      </a>
+      <script>
+        let n = ${CONFIRM_DELAY_SECONDS};
+        const el = document.getElementById('go'), num = document.getElementById('n');
+        const t = setInterval(() => {
+          n--;
+          if (n <= 0) {
+            clearInterval(t);
+            el.style.pointerEvents = 'auto'; el.style.background = '#ff3d8a'; el.style.color = '#fff';
+            el.textContent = '✅ Confirm & Continue';
+          } else { num.textContent = n; }
+        }, 1000);
+      </script>
+    </body></html>
+  `);
+});
+
+// ---------------------------------------------------------------------------
+// CONFIRM — the second gate, reached only via the button on the page above.
+// A generic public "link-bypass bot" (built to automate well-known shortlink
+// providers like GPLinks) has no reason to know this endpoint exists, let
+// alone drive a real browser through its JS-gated button — so this
+// specifically raises the bar against exactly the pattern reported: pasting
+// the shortlink into a resolver bot and opening the result. It won't stop a
+// determined attacker who scripts OUR site specifically, but that is a much
+// higher bar than using an off-the-shelf public bypass bot.
+// ---------------------------------------------------------------------------
+app.get('/api/support/confirm', async (req, res) => {
+  const { session, token } = req.query;
+  const record = await sessionGet(session);
+
+  if (!record || !verifyTokenSignature(session, token) || !record.gplinksAt) {
+    return res.status(400).send('<h2>Invalid or expired support link.</h2>');
+  }
+  if ((Date.now() - record.gplinksAt) / 1000 < CONFIRM_DELAY_SECONDS) {
+    return res.status(400).send('<h2>Too fast — please use the button on the previous page.</h2>');
   }
 
   record.verified = true;
@@ -1477,11 +1527,12 @@ const PREMIUM_STREAK_DAYS = 7;
 function isPremiumSupporter(supporter) {
   if (!supporter) return false;
   const streakPremium = (supporter.streak || 0) >= PREMIUM_STREAK_DAYS && isCurrentlyActive(supporter);
-  // Set by the Forward Bot's weekly-winner reward (POST /api/admin/grant-weekly-premium)
-  // — independent of streak, so a winner shows Premium everywhere (site badge,
-  // bot crown, Forward Bot content) even if their daily streak lapses.
-  const weeklyPremium = supporter.weeklyPremiumUntil && supporter.weeklyPremiumUntil > Date.now();
-  return !!(streakPremium || weeklyPremium);
+  // Set by the Forward Bot — either a weekly-leaderboard reward or a manual
+  // /grantaccess — independent of streak, so a granted person shows Premium
+  // everywhere (site badge, bot crown, Forward Bot content) even if their
+  // daily streak lapses, and it self-expires with no extra cleanup needed.
+  const grantedPremium = supporter.premiumGrantUntil && supporter.premiumGrantUntil > Date.now();
+  return !!(streakPremium || grantedPremium);
 }
 
 // ---------------------------------------------------------------------------
@@ -1561,8 +1612,31 @@ app.get('/api/support/weekly-winner', async (req, res) => {
 // same way as premium-check/status-check rather than the owner-telegramId
 // checks used by the Danger Zone actions.
 // ---------------------------------------------------------------------------
-app.post('/api/admin/grant-weekly-premium', async (req, res) => {
-  const { telegramId, days, key } = req.body || {};
+
+// Same admin_audit_log the site's own Admin panel already renders (Settings
+// tab actions push here too) — reusing it means grant/expiry events show up
+// in the existing "Admin activity log" UI with zero frontend changes.
+async function appendAuditLog(action, by) {
+  try {
+    const raw = await redisCommand(['GET', 'admin_audit_log']);
+    const log = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+    log.unshift({ action, by, at: Date.now() });
+    await redisCommand(['SET', 'admin_audit_log', JSON.stringify(log.slice(0, 40))]);
+  } catch (e) { /* best-effort — a missed log entry shouldn't break the grant itself */ }
+}
+
+// ---------------------------------------------------------------------------
+// GRANT PREMIUM — the write-side companion to weekly-winner above. The
+// Forward Bot calls this right after ANY premium grant — a weekly-leaderboard
+// reward OR a manual /grantaccess — so the site (dashboard badge, leaderboard
+// crown, admin table) shows the same Premium status, and the admin panel's
+// activity log immediately shows who got it and why. Same shared-secret
+// trust as the other SUPPORT_API_KEY endpoints — this is bot-to-bot, not
+// owner-to-panel, so it's keyed the same way as premium-check/status-check
+// rather than the owner-telegramId checks used by the Danger Zone actions.
+// ---------------------------------------------------------------------------
+app.post('/api/admin/grant-premium', async (req, res) => {
+  const { telegramId, days, key, source, name } = req.body || {};
   if (process.env.SUPPORT_API_KEY && key !== process.env.SUPPORT_API_KEY) {
     return res.status(401).json({ error: 'Invalid or missing API key' });
   }
@@ -1572,16 +1646,47 @@ app.post('/api/admin/grant-weekly-premium', async (req, res) => {
   }
   try {
     const recKey = 'supporter:tg_' + telegramId;
+    let rec;
     const raw = await redisCommand(['GET', recKey]);
-    if (!raw) return res.status(404).json({ error: 'supporter not found' });
-    const rec = JSON.parse(raw);
-    rec.weeklyPremiumUntil = Date.now() + grantDays * 86400000;
+    if (raw) {
+      rec = JSON.parse(raw);
+    } else {
+      // Manual /grantaccess can target someone who's never connected on the
+      // site yet — make a minimal record so the grant still shows up (name,
+      // streak/history fill in normally once they do connect).
+      rec = { name: name || 'Supporter', streak: 0, totalDays: 0, supportDates: [], lastSupportAt: null, firstSupportAt: null };
+    }
+    rec.premiumGrantUntil = Date.now() + grantDays * 86400000;
     await redisCommand(['SET', recKey, JSON.stringify(rec)]);
     invalidateSupportersCache();
-    res.json({ ok: true, until: rec.weeklyPremiumUntil });
+
+    const who = rec.name || name || ('Telegram ID ' + telegramId);
+    const via = source === 'weekly' ? 'weekly-reward' : 'Forward Bot /grantaccess';
+    await appendAuditLog(`🎁 ${who} got ${grantDays} day(s) of Premium (${via})`, 'Forward Bot');
+
+    res.json({ ok: true, until: rec.premiumGrantUntil });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// LOG PREMIUM EXPIRED — the Forward Bot schedules an exact one-off job for
+// the moment each grant expires (see weekly_premium_job / grantaccess_command)
+// and calls this right then, so the admin activity log shows the expiry as
+// close to real-time as Telegram's job scheduler allows. No data mutation
+// needed here — the badge already disappears on its own the instant
+// premiumGrantUntil is in the past (isPremiumSupporter checks it live) —
+// this is purely for the admin-facing notification trail.
+// ---------------------------------------------------------------------------
+app.post('/api/admin/log-premium-expired', async (req, res) => {
+  const { telegramId, name, key } = req.body || {};
+  if (process.env.SUPPORT_API_KEY && key !== process.env.SUPPORT_API_KEY) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+  const who = name || ('Telegram ID ' + telegramId);
+  await appendAuditLog(`⏳ ${who}'s Premium expired`, 'System');
+  res.json({ ok: true });
 });
 
 // True only for the one Telegram ID recorded as owner in the 'admins' key.
@@ -1641,7 +1746,7 @@ app.post('/api/admin/reset-all-supporters', async (req, res) => {
       rec.supportDates = [];
       rec.lastSupportAt = null;
       rec.firstSupportAt = null;
-      rec.weeklyPremiumUntil = null;
+      rec.premiumGrantUntil = null;
       await redisCommand(['SET', k, JSON.stringify(rec)]);
       reset++;
     }

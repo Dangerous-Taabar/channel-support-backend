@@ -41,7 +41,8 @@ app.use((req, res, next) => {
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
 app.use(cors({
-  origin: allowedOrigins.includes('*') ? true : allowedOrigins
+  origin: allowedOrigins.includes('*') ? true : allowedOrigins,
+  credentials: true
 }));
 
 const PORT = process.env.PORT || 3000;
@@ -192,6 +193,35 @@ function verifyTokenSignature(sessionId, token) {
 }
 
 // ---------------------------------------------------------------------------
+// Session-binding cookie — set on THIS browser the moment it starts a
+// support session, checked when it comes back at /callback. No cookie
+// library needed for this (Express doesn't parse cookies by default; we
+// only ever need to read/write this one, so plain header parsing is enough).
+//
+// SameSite=None;Secure is required because the frontend (Cloudflare Pages)
+// and this backend (Render) are different domains — a normal SameSite=Lax
+// cookie wouldn't survive the cross-origin fetch() that creates the
+// session. This is a real, if unlikely, single-purpose cross-origin cookie
+// (not a tracking pattern), but SOME privacy-hardened browsers still block
+// it — so a MISSING cookie is never treated as proof of tampering (that
+// would repeat the old Referer-header mistake and could block real
+// supporters). Only a cookie that's present AND doesn't match the session
+// being opened is treated as certain — that can only happen if this
+// browser is not the one that started the session.
+function setSessionCookie(res, sessionId) {
+  res.setHeader('Set-Cookie', `sup_bind=${sessionId}; Max-Age=1800; Path=/; HttpOnly; Secure; SameSite=None`);
+}
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `sup_bind=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=None`);
+}
+function getSessionCookie(req) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  const hit = header.split(';').map(s => s.trim()).find(s => s.startsWith('sup_bind='));
+  return hit ? decodeURIComponent(hit.slice('sup_bind='.length)) : null;
+}
+
+// ---------------------------------------------------------------------------
 // 1) START a support session
 //    Frontend calls this when the user clicks "Open Support Link".
 //    We create a unique, signed session, wrap the callback URL through the
@@ -209,6 +239,7 @@ app.post('/api/support/start', async (req, res) => {
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = signToken(sessionId);
   await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false });
+  setSessionCookie(res, sessionId);
 
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
 
@@ -252,6 +283,30 @@ app.get('/api/support/callback', async (req, res) => {
 
   if (!record || !verifyTokenSignature(session, token)) {
     return res.status(400).send('<h2>Invalid or expired support link.</h2>');
+  }
+
+  // ---- Same-browser check (the actual "direct link = 404" gate) ----
+  // sup_bind was set on THIS browser the moment it called /api/support/start
+  // for THIS exact session. If the cookie is present but points at a
+  // DIFFERENT session, this definitely isn't that browser — someone opened
+  // a resolved/shared/bypassed link cold, without ever starting the flow
+  // here. Reject immediately, before wasting anyone's time on the
+  // confirm-wait screen below.
+  //
+  // A MISSING cookie is NOT treated as proof of anything — some browsers
+  // block this kind of cross-origin cookie outright, and a real supporter
+  // must never be blocked for that (this is exactly the mistake the old
+  // Referer-header check made). A missing cookie just falls through to the
+  // normal flow; the localStorage check on the frontend is the fallback
+  // net for that case.
+  const boundSession = getSessionCookie(req);
+  if (boundSession && boundSession !== session) {
+    return res.status(404).send(`
+      <html><body style="background:#08050f;color:#fff;font-family:sans-serif;text-align:center;padding-top:60px;">
+        <h2>404 — Not Found</h2>
+        <p>Yeh link is browser ka nahi hai.<br>Support Center se khud shuru karo.</p>
+      </body></html>
+    `);
   }
 
   const elapsedSeconds = (Date.now() - record.createdAt) / 1000;
@@ -336,6 +391,7 @@ app.get('/api/support/confirm', async (req, res) => {
   record.verified = true;
   record.verifiedAt = Date.now();
   await sessionSet(session, record);
+  clearSessionCookie(res);
 
   if (process.env.FRONTEND_URL) {
     const redirectUrl = `${process.env.FRONTEND_URL.replace(/\/$/, '')}/?verified=1&session=${session}`;

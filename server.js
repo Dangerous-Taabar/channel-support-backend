@@ -1463,6 +1463,92 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
+    // ---- CASE 1.4: /testcard or /preview — admin-only preview of what support notification looks like in group ----
+    if (msg.text && /^\/(testcard|preview)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
+      const isPriv = msg.chat.type === 'private';
+      const userIsAdmin = isPriv ? (await checkIsAdmin(msg.from.id)) : false;
+      let groupIsAdmin = false;
+      if (!isPriv) {
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(msg.chat.id)}&user_id=${msg.from.id}`);
+          const d = await r.json();
+          if (d.ok) groupIsAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
+        } catch (e) {}
+      }
+
+      if (userIsAdmin || groupIsAdmin) {
+        const targetChat = isPriv ? (process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || msg.chat.id) : msg.chat.id;
+        let theme = 'normal';
+        try {
+          const raw = await redisCommand(['GET', 'settings']);
+          if (raw) theme = JSON.parse(raw).seasonTheme || 'normal';
+        } catch (e) {}
+
+        const who = msg.from.username ? '@' + msg.from.username : (msg.from.first_name || 'Admin');
+        const userLvl = 6;
+        const s = 14;
+        const userXp = 6500;
+        const title = theme === 'diwali' ? 'Diwali Shrestha Patron' : (theme === 'navratri' ? 'Navratri Shakti Yoddha' : 'Grandmaster VIP (Maha Yoddha)');
+        const tierName = 'Grandmaster VIP';
+
+        let caption = '';
+        let buttonText = '🚀 Unlock VIP Pass';
+
+        if (theme === 'diwali') {
+          buttonText = '🪔 Claim Diwali Pass';
+          caption =
+            `🪔 <b>SHUBH DEEPAWALI!</b> 🪔\n` +
+            `👑 <b>DIWALI SPECIAL VIP PASS CLAIMED!</b>\n\n` +
+            `⚡ <b>${who}</b> ne Festival Support complete kiya!\n\n` +
+            `🏆 <b>Title:</b> ${title}\n` +
+            `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName}\n` +
+            `🔥 <b>Streak:</b> ${s} Days Unstoppable!\n` +
+            `✨ <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
+            `🪔 <b>Edition:</b> Deepawali Mahotsav 2026 [Verified]\n\n` +
+            `👇 <i>Tum bhi apna Diwali VIP Pass unlock karo:</i>\n\n` +
+            `<i>(🧪 Admin Test Preview Card)</i>`;
+        } else if (theme === 'navratri') {
+          buttonText = '🚩 Claim Shakti Pass';
+          caption =
+            `🚩 <b>JAI MATA DI!</b> 🚩\n` +
+            `⚡ <b>NAVRATRI SHAKTI PASS UNLOCKED!</b>\n\n` +
+            `👑 <b>${who}</b> ne Navratri Special Support claim kiya!\n\n` +
+            `🏆 <b>Title:</b> ${title}\n` +
+            `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName}\n` +
+            `🔥 <b>Streak:</b> ${s} Days Fire Streak!\n` +
+            `💎 <b>Supporter Aura:</b> ${userXp.toLocaleString()} XP\n` +
+            `🚩 <b>Edition:</b> Navratri Special Edition [Verified]\n\n` +
+            `👇 <i>Tum bhi apna Shakti Pass claim karo:</i>\n\n` +
+            `<i>(🧪 Admin Test Preview Card)</i>`;
+        } else {
+          caption =
+            `👑 <b>ROYAL VIP LEVEL UP!</b> 👑\n\n` +
+            `⚡ <b>${who}</b> reached <b>LEVEL ${userLvl} — ${tierName}</b>!\n\n` +
+            `🏆 <b>Rank Title:</b> ${title}\n` +
+            `🔥 <b>Streak:</b> ${s} Days Unbroken!\n` +
+            `💎 <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
+            `🎖️ <b>Status:</b> Verified Royal Member\n\n` +
+            `👇 <i>Tum bhi apna VIP Card unlock karo:</i>\n\n` +
+            `<i>(🧪 Admin Test Preview Card)</i>`;
+        }
+
+        const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
+        const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
+
+        // Send preview directly to the target group or current chat
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
+        }).catch(() => {});
+
+        if (isPriv && targetChat !== msg.chat.id) {
+          await tgSendText(msg.chat.id, `✅ Preview card group me bhej diya gaya hai! Check your discussion / notify chat.`);
+        }
+        return;
+      }
+    }
+
     // ---- CASE 1.5: /check — admin-only, works in ANY group/supergroup/topic ----
     // Reply to someone's message with /check, or type /check <username or ID>.
     if ((msg.chat.type === 'group' || msg.chat.type === 'supergroup') && msg.text && /^\/check(@\S+)?(\s|$)/i.test(msg.text.trim())) {

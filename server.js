@@ -689,14 +689,42 @@ function periodScore(s, period) {
   return s.totalDays || 0;
 }
 
-async function checkIsAdmin(userId) {
-  const chatId = process.env.COMMUNITY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
-  if (!chatId || !process.env.TELEGRAM_BOT_TOKEN) return false;
+async function checkIsAdmin(userId, chatId) {
+  if (!userId || !process.env.TELEGRAM_BOT_TOKEN) return false;
+
+  // 1. Check Owner/Admin from Redis 'admins'
   try {
-    const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${userId}`);
-    const d = await r.json();
-    return d.ok && (d.result.status === 'administrator' || d.result.status === 'creator');
-  } catch (e) { return false; }
+    const raw = await redisCommand(['GET', 'admins']);
+    if (raw) {
+      const a = JSON.parse(raw);
+      if (String(a.ownerId) === String(userId)) return true;
+      if (Array.isArray(a.list) && a.list.some(x => String(x.id || x) === String(userId))) return true;
+    }
+  } catch (e) {}
+
+  // 2. Check CONTENT_OWNER_IDS env
+  const owners = (process.env.CONTENT_OWNER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (owners.includes(String(userId))) return true;
+
+  // 3. Check current chat admin status if provided
+  if (chatId) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${userId}`);
+      const d = await r.json();
+      if (d.ok && (d.result.status === 'administrator' || d.result.status === 'creator')) return true;
+    } catch (e) {}
+  }
+
+  // 4. Check fallback chats (COMMUNITY_CHAT_ID, TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_CHAT_ID)
+  const fallbackChats = [process.env.COMMUNITY_CHAT_ID, process.env.TELEGRAM_CHAT_ID, process.env.TELEGRAM_NOTIFY_CHAT_ID].filter(Boolean);
+  for (const c of fallbackChats) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(c)}&user_id=${userId}`);
+      const d = await r.json();
+      if (d.ok && (d.result.status === 'administrator' || d.result.status === 'creator')) return true;
+    } catch (e) {}
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1486,17 +1514,16 @@ app.post('/api/telegram/webhook', async (req, res) => {
     // ---- CASE 1.4: /setseason <navratri|diwali|normal> — admin command to switch active festival season ----
     if (msg.text && /^\/setseason(@\S+)?(\s+|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
-      const userIsAdmin = isPriv ? (await checkIsAdmin(msg.from.id)) : false;
-      let groupIsAdmin = false;
-      if (!isPriv) {
-        try {
-          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(msg.chat.id)}&user_id=${msg.from.id}`);
-          const d = await r.json();
-          if (d.ok) groupIsAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
-        } catch (e) {}
+      const userId = msg.from ? msg.from.id : null;
+      let allowed = false;
+      if (!isPriv && msg.sender_chat && msg.sender_chat.id === msg.chat.id) {
+        allowed = true;
+      }
+      if (!allowed && userId) {
+        allowed = await checkIsAdmin(userId, msg.chat.id);
       }
 
-      if (userIsAdmin || groupIsAdmin) {
+      if (allowed) {
         const parts = msg.text.trim().split(/\s+/);
         const newTheme = (parts[1] || '').toLowerCase();
         if (!['navratri', 'diwali', 'normal'].includes(newTheme)) {
@@ -1519,17 +1546,16 @@ app.post('/api/telegram/webhook', async (req, res) => {
     // ---- CASE 1.5: /testcard or /preview — admin-only preview of what support notification looks like in group ----
     if (msg.text && /^\/(testcard|preview)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
-      const userIsAdmin = isPriv ? (await checkIsAdmin(msg.from.id)) : false;
-      let groupIsAdmin = false;
-      if (!isPriv) {
-        try {
-          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(msg.chat.id)}&user_id=${msg.from.id}`);
-          const d = await r.json();
-          if (d.ok) groupIsAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
-        } catch (e) {}
+      const userId = msg.from ? msg.from.id : null;
+      let allowed = false;
+      if (!isPriv && msg.sender_chat && msg.sender_chat.id === msg.chat.id) {
+        allowed = true;
+      }
+      if (!allowed && userId) {
+        allowed = await checkIsAdmin(userId, msg.chat.id);
       }
 
-      if (userIsAdmin || groupIsAdmin) {
+      if (allowed) {
         const targetChat = isPriv ? (process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || msg.chat.id) : msg.chat.id;
         let theme = 'normal';
         try {
@@ -1537,7 +1563,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
           if (raw) theme = JSON.parse(raw).seasonTheme || 'normal';
         } catch (e) {}
 
-        const who = msg.from.username ? '@' + msg.from.username : (msg.from.first_name || 'Admin');
+        const who = msg.from && msg.from.username ? '@' + msg.from.username : ((msg.from && msg.from.first_name) || 'Admin');
         const userLvl = 6;
         const s = 14;
         const userXp = 6500;
@@ -1590,7 +1616,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
 
         let cachedAnimFileId = null;
         try {
-          cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_' + theme]);
+          cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_v2_' + theme]);
         } catch (e) {}
 
         const localCardPath = path.join(__dirname, 'public', `card-${theme}.mp4`);
@@ -1633,7 +1659,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
               sentOk = true;
               const fileId = d.result.animation?.file_id || d.result.document?.file_id || d.result.video?.file_id;
               if (fileId) {
-                redisCommand(['SET', 'latest_card_anim_' + theme, fileId]).catch(() => {});
+                redisCommand(['SET', 'latest_card_anim_v2_' + theme, fileId]).catch(() => {});
               }
             }
           } catch (e) {}
@@ -1659,7 +1685,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
               sentOk = true;
               const fileId = d.result.animation?.file_id || d.result.document?.file_id || d.result.video?.file_id;
               if (fileId) {
-                redisCommand(['SET', 'latest_card_anim_' + theme, fileId]).catch(() => {});
+                redisCommand(['SET', 'latest_card_anim_v2_' + theme, fileId]).catch(() => {});
               }
             }
           } catch (e) {}
@@ -2300,7 +2326,7 @@ app.post('/api/notify/support', async (req, res) => {
     }
     if (!animBuffer) {
       let cachedAnim = null;
-      try { cachedAnim = await redisCommand(['GET', 'latest_card_anim_' + activeTheme]); } catch(e){}
+      try { cachedAnim = await redisCommand(['GET', 'latest_card_anim_v2_' + activeTheme]); } catch(e){}
       const localCardPath = path.join(__dirname, 'public', `card-${activeTheme}.mp4`);
       if (cachedAnim) {
         try {
@@ -2349,7 +2375,7 @@ app.post('/api/notify/support', async (req, res) => {
       if (data.ok && data.result) {
         const fileId = data.result.animation?.file_id || data.result.document?.file_id || data.result.video?.file_id;
         if (fileId) {
-          redisCommand(['SET', 'latest_card_anim_' + activeTheme, fileId]).catch(() => {});
+          redisCommand(['SET', 'latest_card_anim_v2_' + activeTheme, fileId]).catch(() => {});
         }
       }
     } else if (imageBuffer) {

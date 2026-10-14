@@ -1855,11 +1855,7 @@ async function applySupportCompletion(){
         try{ drawCertificate(theme); certImage = document.getElementById('certCanvas').toDataURL('image/png'); }catch(e){}
         const rankInfo = getRankInfo(supporter.totalDays, supporter.streak, theme);
 
-        // Record a quick 1.8s live animated clip so Telegram gets an actual GIF
         let animVideo = null;
-        try{
-          animVideo = await recordAnimatedClip(theme, 1800);
-        }catch(e){ animVideo = null; }
 
         fetch(API_BASE_URL + '/api/notify/support', {
           method:'POST', headers:{'Content-Type':'application/json'},
@@ -2615,29 +2611,26 @@ function recordAnimatedClip(theme, durationMs = 3000){
 }
 
 async function downloadAnimatedCard(){
-  const c = document.getElementById('certCanvas');
   const btn = document.getElementById('btnAnimDownload');
-  if(!c) return;
-  if(btn){ btn.disabled = true; btn.textContent = '⏳ Recording (3s)…'; }
-  toast('🎬 Animated video record ho raha hai (3 sec)…');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Downloading…'; }
+  toast('🎬 High-Definition Animated Pass download ho raha hai…');
   try {
     const theme = !isAdminSession() ? (currentSeasonTheme() || 'normal') : (activePassEdition || currentSeasonTheme() || 'normal');
-    const dataUrl = await recordAnimatedClip(theme, 3000);
-    if(dataUrl){
-      const ext = dataUrl.startsWith('data:video/mp4') ? 'mp4' : 'webm';
+    const res = await fetch(`/assets/card-${theme}.mp4`);
+    if(res.ok){
+      const blob = await res.blob();
       const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `vip-pass-${theme}-animated.${ext}`;
+      a.href = URL.createObjectURL(blob);
+      a.download = `vip-pass-${theme}-animated.mp4`;
       a.click();
-      toast('🎬 Animated VIP Pass download ho gaya!');
+      toast('🎬 Butter-smooth Animated VIP Pass download ho gaya!');
     } else {
       downloadCert();
     }
-    if(btn){ btn.disabled = false; btn.textContent = '🎬 Animated Video (GIF)'; }
   } catch(e) {
-    if(btn){ btn.disabled = false; btn.textContent = '🎬 Animated Video (GIF)'; }
     downloadCert();
   }
+  if(btn){ btn.disabled = false; btn.textContent = '🎬 Animated Video (GIF)'; }
 }
 
 async function shareToGroup(){
@@ -2704,7 +2697,7 @@ async function triggerAdminTestPreview(){
     const theme = activePassEdition || currentSeasonTheme() || 'normal';
     drawCertificate(theme);
     const certImage = document.getElementById('certCanvas').toDataURL('image/png');
-    const animVideo = await recordAnimatedClip(theme, 3000);
+    const animVideo = null;
     const rankInfo = getRankInfo(supporter ? supporter.totalDays : 50, supporter ? supporter.streak : 14, theme);
 
     const r = await fetch(API_BASE_URL + '/api/notify/support', {

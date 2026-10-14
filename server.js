@@ -540,21 +540,38 @@ async function buildMyStatsCard(userId) {
       ? '👑  <b>Premium unlocked</b> — Forward Bot se premium content chalu hai'
       : `🔒  Premium ${toGo} din aur (lagataar) — ${streakBar(supporter.streak || 0, PREMIUM_STREAK_DAYS)}`;
 
+    const d = supporter.totalDays || 0;
+    const userLvl = d >= 100 ? 8 : d >= 75 ? 7 : d >= 50 ? 6 : d >= 30 ? 5 : d >= 15 ? 4 : d >= 7 ? 3 : d >= 3 ? 2 : (d >= 1 ? 1 : 0);
+    const titles = {
+      0: 'Newbie',
+      1: 'Recruit Sahyogi',
+      2: 'Apprentice Sadasya',
+      3: 'Streak Warrior',
+      4: 'Elite Guardian',
+      5: 'Channel Guardian',
+      6: 'Grandmaster VIP (Maha Yoddha)',
+      7: 'Mythic Titan',
+      8: 'Immortal Legend'
+    };
+    const userTitle = titles[userLvl] || 'VIP Member';
+    const xp = d * 100 + ((supporter.streak || 0) > 7 ? (supporter.streak - 7) * 20 : 0);
+
     text =
-      `📊  <b>Your Supporter Card</b>\n` +
+      `👑  <b>Royal VIP Supporter Card</b>\n` +
       `────────────────────\n` +
+      `🎖️  <b>Level ${userLvl}:</b> ${userTitle}\n` +
+      `⚡  <b>Power XP:</b> ${xp.toLocaleString()} XP\n` +
       `${statusLine}\n\n` +
-      `🔥  Streak       <b>${supporter.streak || 0} din</b>\n` +
-      `📅  Lifetime      <b>${supporter.totalDays || 0} din</b>\n` +
-      `🏆  Rank          <b>#${rank}</b> of ${total}\n\n` +
+      `🔥  Streak:      <b>${supporter.streak || 0} din</b> (Fire Streak)\n` +
+      `🏆  Rank:        <b>#${rank}</b> of ${total} supporters\n\n` +
       `${premiumLine}`;
   } else {
     showSupportBtn = true;
     text =
-      `📊  <b>Your Supporter Card</b>\n` +
+      `👑  <b>Royal VIP Supporter Card</b>\n` +
       `────────────────────\n` +
       `Tumne abhi tak support nahi kiya hai.\n\n` +
-      `Support karke apna naam yahan dekho, streak banao, aur ${PREMIUM_STREAK_DAYS} din lagataar support karke 👑 <b>Premium</b> unlock karo!`;
+      `Support karke apna Level badhao, Power XP kamao, aur ${PREMIUM_STREAK_DAYS} din lagataar support karke 👑 <b>Premium</b> unlock karo!`;
   }
 
   const rows = [[{ text: '🔄 Refresh', callback_data: 'my_stats' }]];
@@ -1997,11 +2014,54 @@ app.post('/api/notify/support', async (req, res) => {
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
-  const { name, username, totalDays, streak, certImage } = req.body || {};
+  const { name, username, totalDays, streak, certImage, level, title, tierName, xp, theme } = req.body || {};
   const who = username ? '@' + username : (name || 'Someone');
-  const caption = `🎉 ${who} ne channel ko support kiya!\n📅 Total support: ${totalDays} din\n🔥 Current streak: ${streak} din\n\n👇 Tum bhi support karo:`;
+  const d = totalDays || 1;
+  const s = streak || 1;
+  const userLvl = level || (d >= 100 ? 8 : d >= 75 ? 7 : d >= 50 ? 6 : d >= 30 ? 5 : d >= 15 ? 4 : d >= 7 ? 3 : d >= 3 ? 2 : 1);
+  const userXp = xp || (d * 100);
+  const activeTheme = theme || 'normal';
+
+  let caption = '';
+  let buttonText = '🚀 Unlock VIP Pass';
+
+  if (activeTheme === 'diwali') {
+    buttonText = '🪔 Claim Diwali Pass';
+    caption =
+      `🪔 <b>SHUBH DEEPAWALI!</b> 🪔\n` +
+      `👑 <b>DIWALI SPECIAL VIP PASS CLAIMED!</b>\n\n` +
+      `⚡ <b>${who}</b> ne Festival Support complete kiya!\n\n` +
+      `🏆 <b>Title:</b> ${title || 'Diwali Shrestha Patron'}\n` +
+      `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName || 'Grandmaster VIP'}\n` +
+      `🔥 <b>Streak:</b> ${s} Days Unstoppable!\n` +
+      `✨ <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
+      `🪔 <b>Edition:</b> Deepawali Mahotsav 2026 [Verified]\n\n` +
+      `👇 <i>Tum bhi apna Diwali VIP Pass unlock karo:</i>`;
+  } else if (activeTheme === 'navratri') {
+    buttonText = '🚩 Claim Shakti Pass';
+    caption =
+      `🚩 <b>JAI MATA DI!</b> 🚩\n` +
+      `⚡ <b>NAVRATRI SHAKTI PASS UNLOCKED!</b>\n\n` +
+      `👑 <b>${who}</b> ne Navratri Special Support claim kiya!\n\n` +
+      `🏆 <b>Title:</b> ${title || 'Navratri Shakti Yoddha'}\n` +
+      `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName || 'Shakti Patron'}\n` +
+      `🔥 <b>Streak:</b> ${s} Days Fire Streak!\n` +
+      `💎 <b>Supporter Aura:</b> ${userXp.toLocaleString()} XP\n` +
+      `🚩 <b>Edition:</b> Navratri Special Edition [Verified]\n\n` +
+      `👇 <i>Tum bhi apna Shakti Pass claim karo:</i>`;
+  } else {
+    caption =
+      `👑 <b>ROYAL VIP LEVEL UP!</b> 👑\n\n` +
+      `⚡ <b>${who}</b> reached <b>LEVEL ${userLvl} — ${tierName || 'Grandmaster VIP'}</b>!\n\n` +
+      `🏆 <b>Rank Title:</b> ${title || 'Maha Yoddha (Shahi Patron)'}\n` +
+      `🔥 <b>Streak:</b> ${s} Days Unbroken!\n` +
+      `💎 <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
+      `🎖️ <b>Status:</b> Verified Royal Member\n\n` +
+      `👇 <i>Tum bhi apna VIP Card unlock karo:</i>`;
+  }
+
   const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
-  const replyMarkup = { inline_keyboard: [[{ text: '🚀 Support Now', url: siteUrl }]] };
+  const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
 
   try {
     // Prefer the supporter's actual certificate image (sent by the frontend
@@ -2028,6 +2088,7 @@ app.post('/api/notify/support', async (req, res) => {
       const form = new FormData();
       form.append('chat_id', targetChat);
       form.append('caption', caption);
+      form.append('parse_mode', 'HTML');
       form.append('reply_markup', JSON.stringify(replyMarkup));
       form.append('photo', imageBuffer, { filename: 'support.png', contentType: 'image/png' });
       const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
@@ -2039,7 +2100,7 @@ app.post('/api/notify/support', async (req, res) => {
       const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: targetChat, text: caption, reply_markup: replyMarkup })
+        body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
       });
       data = await r.json();
     }

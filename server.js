@@ -2014,7 +2014,7 @@ app.post('/api/notify/support', async (req, res) => {
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
-  const { name, username, totalDays, streak, certImage, level, title, tierName, xp, theme } = req.body || {};
+  const { name, username, totalDays, streak, certImage, animVideo, level, title, tierName, xp, theme } = req.body || {};
   const who = username ? '@' + username : (name || 'Someone');
   const d = totalDays || 1;
   const s = streak || 1;
@@ -2064,14 +2064,22 @@ app.post('/api/notify/support', async (req, res) => {
   const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
 
   try {
-    // Prefer the supporter's actual certificate image (sent by the frontend
-    // right after they complete support). Fall back to the channel logo,
-    // then to a plain text message, if that's ever unavailable.
+    let animBuffer = null;
+    let animExt = 'mp4';
+    if (animVideo && animVideo.includes(',')) {
+      try {
+        const header = animVideo.split(',')[0];
+        if (header.includes('webm')) animExt = 'webm';
+        else if (header.includes('gif')) animExt = 'gif';
+        animBuffer = Buffer.from(animVideo.split(',')[1], 'base64');
+      } catch (e) { /* ignore */ }
+    }
+
     let imageBuffer = null;
     if (certImage && certImage.includes(',')) {
       try { imageBuffer = Buffer.from(certImage.split(',')[1], 'base64'); } catch (e) { /* ignore, fall through */ }
     }
-    if (!imageBuffer) {
+    if (!imageBuffer && !animBuffer) {
       try {
         const brandingRaw = await redisCommand(['GET', 'branding']);
         if (brandingRaw) {
@@ -2084,7 +2092,21 @@ app.post('/api/notify/support', async (req, res) => {
     }
 
     let data;
-    if (imageBuffer) {
+    if (animBuffer) {
+      // Send animated GIF / Video loop directly to Telegram
+      const form = new FormData();
+      form.append('chat_id', targetChat);
+      form.append('caption', caption);
+      form.append('parse_mode', 'HTML');
+      form.append('reply_markup', JSON.stringify(replyMarkup));
+      const mimeType = animExt === 'webm' ? 'video/webm' : (animExt === 'gif' ? 'image/gif' : 'video/mp4');
+      form.append('animation', animBuffer, { filename: `support_card.${animExt}`, contentType: mimeType });
+      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
+        method: 'POST',
+        body: form
+      });
+      data = await r.json();
+    } else if (imageBuffer) {
       const form = new FormData();
       form.append('chat_id', targetChat);
       form.append('caption', caption);

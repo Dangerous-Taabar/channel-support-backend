@@ -6,7 +6,7 @@ const fetch = require('node-fetch');
 const FormData = require('form-data');
 
 const app = express();
-app.use(express.json({ limit: '5mb' })); // 5mb so an uploaded channel-logo (base64) fits
+app.use(express.json({ limit: '25mb' })); // 25mb so animated video clips & logos fit safely
 
 // ---------------------------------------------------------------------------
 // SECURITY HEADERS — basic hardening without needing extra dependencies.
@@ -83,7 +83,7 @@ async function redisCommand(cmd) {
 
 // Only known key patterns are writable/readable — stops random/abusive keys
 // and keeps the value size sane (branding logo can be a few hundred KB).
-const ALLOWED_KEY_PATTERN = /^(profile|admins|settings|branding|admin_audit_log|supporter:[\w-]+|adminprofile:[\w-]+|cbfile:\d+|cbfile_seq|cbpost:\d+|cbpost_seq|cb:users|cb:admins|cbuser:[\w-]+|cb:log_total|cb:log_matched|session:[\w-]+|admin_pass:tg_[\w-]+)$/;
+const ALLOWED_KEY_PATTERN = /^(profile|admins|settings|branding|admin_audit_log|latest_card_anim_[\w-]+|card_anim:[\w-]+|supporter:[\w-]+|adminprofile:[\w-]+|cbfile:\d+|cbfile_seq|cbpost:\d+|cbpost_seq|cb:users|cb:admins|cbuser:[\w-]+|cb:log_total|cb:log_matched|session:[\w-]+|admin_pass:tg_[\w-]+)$/;
 function isValidStorageKey(key) {
   return typeof key === 'string' && key.length <= 120 && ALLOWED_KEY_PATTERN.test(key);
 }
@@ -1483,7 +1483,40 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
-    // ---- CASE 1.4: /testcard or /preview — admin-only preview of what support notification looks like in group ----
+    // ---- CASE 1.4: /setseason <navratri|diwali|normal> — admin command to switch active festival season ----
+    if (msg.text && /^\/setseason(@\S+)?(\s+|$)/i.test(msg.text.trim())) {
+      const isPriv = msg.chat.type === 'private';
+      const userIsAdmin = isPriv ? (await checkIsAdmin(msg.from.id)) : false;
+      let groupIsAdmin = false;
+      if (!isPriv) {
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(msg.chat.id)}&user_id=${msg.from.id}`);
+          const d = await r.json();
+          if (d.ok) groupIsAdmin = (d.result.status === 'administrator' || d.result.status === 'creator');
+        } catch (e) {}
+      }
+
+      if (userIsAdmin || groupIsAdmin) {
+        const parts = msg.text.trim().split(/\s+/);
+        const newTheme = (parts[1] || '').toLowerCase();
+        if (!['navratri', 'diwali', 'normal'].includes(newTheme)) {
+          await tgSendText(msg.chat.id, `⚠️ Valid options: <code>/setseason navratri</code>, <code>/setseason diwali</code>, <code>/setseason normal</code>`, {}, 'HTML');
+          return;
+        }
+
+        let s = {};
+        try {
+          const raw = await redisCommand(['GET', 'settings']);
+          if (raw) s = JSON.parse(raw);
+        } catch (e) {}
+        s.seasonTheme = newTheme;
+        await redisCommand(['SET', 'settings', JSON.stringify(s)]);
+        await tgSendText(msg.chat.id, `✅ <b>Season Theme Updated!</b>\n\nAb active season: <b>${newTheme.toUpperCase()}</b> ho gaya hai!\nGroup me <code>/preview</code> likh kar test kar sakte ho!`, {}, 'HTML');
+        return;
+      }
+    }
+
+    // ---- CASE 1.5: /testcard or /preview — admin-only preview of what support notification looks like in group ----
     if (msg.text && /^\/(testcard|preview)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
       const userIsAdmin = isPriv ? (await checkIsAdmin(msg.from.id)) : false;
@@ -1555,35 +1588,85 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
         const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
 
-        // Check if we have an animation file_id cached specifically for this active theme
         let cachedAnimFileId = null;
         try {
           cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_' + theme]);
         } catch (e) {}
 
+        const localCardPath = path.join(__dirname, 'public', `card-${theme}.mp4`);
+        let sentOk = false;
+
+        // Stage 1: Try cached Telegram file_id (instant)
         if (cachedAnimFileId) {
-          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: targetChat,
-              animation: cachedAnimFileId,
-              caption: caption,
-              parse_mode: 'HTML',
-              reply_markup: replyMarkup
-            })
-          });
-          const d = await r.json();
-          if (!d.ok) {
-            // fallback to text if file_id expired
-            await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          try {
+            const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
-            }).catch(() => {});
-          }
-        } else {
-          // Send preview text directly to the target group or current chat
+              body: JSON.stringify({
+                chat_id: targetChat,
+                animation: cachedAnimFileId,
+                caption: caption,
+                parse_mode: 'HTML',
+                reply_markup: replyMarkup
+              })
+            });
+            const d = await r.json();
+            if (d.ok) sentOk = true;
+          } catch (e) {}
+        }
+
+        // Stage 2: If not sent or file_id invalid, upload local bundled MP4 clip directly
+        if (!sentOk && fs.existsSync(localCardPath)) {
+          try {
+            const form = new FormData();
+            form.append('chat_id', targetChat);
+            form.append('caption', caption);
+            form.append('parse_mode', 'HTML');
+            form.append('reply_markup', JSON.stringify(replyMarkup));
+            form.append('animation', fs.createReadStream(localCardPath), { filename: `card-${theme}.mp4`, contentType: 'video/mp4' });
+            const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
+              method: 'POST',
+              body: form
+            });
+            const d = await r.json();
+            if (d.ok && d.result) {
+              sentOk = true;
+              const fileId = d.result.animation?.file_id || d.result.document?.file_id || d.result.video?.file_id;
+              if (fileId) {
+                redisCommand(['SET', 'latest_card_anim_' + theme, fileId]).catch(() => {});
+              }
+            }
+          } catch (e) {}
+        }
+
+        // Stage 3: Send via public URL
+        if (!sentOk) {
+          try {
+            const remoteUrl = `https://channel-support.pages.dev/assets/card-${theme}.mp4`;
+            const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: targetChat,
+                animation: remoteUrl,
+                caption: caption,
+                parse_mode: 'HTML',
+                reply_markup: replyMarkup
+              })
+            });
+            const d = await r.json();
+            if (d.ok && d.result) {
+              sentOk = true;
+              const fileId = d.result.animation?.file_id || d.result.document?.file_id || d.result.video?.file_id;
+              if (fileId) {
+                redisCommand(['SET', 'latest_card_anim_' + theme, fileId]).catch(() => {});
+              }
+            }
+          } catch (e) {}
+        }
+
+        // Final fallback: plain text only if all video methods fail
+        if (!sentOk) {
           await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2210,11 +2293,33 @@ app.post('/api/notify/support', async (req, res) => {
       } catch (e) { /* ignore */ }
     }
 
+    let data = null;
     let imageBuffer = null;
     if (certImage && certImage.includes(',')) {
       try { imageBuffer = Buffer.from(certImage.split(',')[1], 'base64'); } catch (e) { /* ignore, fall through */ }
     }
-    if (!imageBuffer && !animBuffer) {
+    if (!animBuffer) {
+      let cachedAnim = null;
+      try { cachedAnim = await redisCommand(['GET', 'latest_card_anim_' + activeTheme]); } catch(e){}
+      const localCardPath = path.join(__dirname, 'public', `card-${activeTheme}.mp4`);
+      if (cachedAnim) {
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: targetChat, animation: cachedAnim, caption, parse_mode: 'HTML', reply_markup: replyMarkup })
+          });
+          data = await r.json();
+        } catch (e) {}
+      } else if (fs.existsSync(localCardPath)) {
+        try {
+          animBuffer = fs.readFileSync(localCardPath);
+          animExt = 'mp4';
+        } catch(e){}
+      }
+    }
+
+    if (!imageBuffer && !animBuffer && !data) {
       try {
         const brandingRaw = await redisCommand(['GET', 'branding']);
         if (brandingRaw) {
@@ -2226,8 +2331,8 @@ app.post('/api/notify/support', async (req, res) => {
       } catch (e) { /* no logo set yet — fall back to text-only below */ }
     }
 
-    let data;
-    if (animBuffer) {
+    if (!data) {
+      if (animBuffer) {
       // Send animated GIF / Video loop directly to Telegram
       const form = new FormData();
       form.append('chat_id', targetChat);
@@ -2265,9 +2370,10 @@ app.post('/api/notify/support', async (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
       });
-      data = await r.json();
+        data = await r.json();
+      }
     }
-    res.json({ sent: !!data.ok, error: data.ok ? null : data.description });
+    res.json({ sent: !!(data && data.ok), error: (data && data.ok) ? null : (data ? data.description : 'Failed to send') });
 
     // ---- Also unlock them in the Community's main topic (best-effort) ----
     if (process.env.COMMUNITY_CHAT_ID) {

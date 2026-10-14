@@ -1535,12 +1535,42 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
         const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
 
-        // Send preview directly to the target group or current chat
-        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
-        }).catch(() => {});
+        // Check if we have an animation file_id cached for this theme
+        let cachedAnimFileId = null;
+        try {
+          cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_' + theme]);
+          if (!cachedAnimFileId) cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_navratri']) || await redisCommand(['GET', 'latest_card_anim_diwali']);
+        } catch (e) {}
+
+        if (cachedAnimFileId) {
+          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: targetChat,
+              animation: cachedAnimFileId,
+              caption: caption,
+              parse_mode: 'HTML',
+              reply_markup: replyMarkup
+            })
+          });
+          const d = await r.json();
+          if (!d.ok) {
+            // fallback to text if file_id expired
+            await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
+            }).catch(() => {});
+          }
+        } else {
+          // Send preview text directly to the target group or current chat
+          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
+          }).catch(() => {});
+        }
 
         if (isPriv && targetChat !== msg.chat.id) {
           await tgSendText(msg.chat.id, `✅ Preview card group me bhej diya gaya hai! Check your discussion / notify chat.`);
@@ -2192,6 +2222,12 @@ app.post('/api/notify/support', async (req, res) => {
         body: form
       });
       data = await r.json();
+      if (data.ok && data.result) {
+        const fileId = data.result.animation?.file_id || data.result.document?.file_id || data.result.video?.file_id;
+        if (fileId) {
+          redisCommand(['SET', 'latest_card_anim_' + activeTheme, fileId]).catch(() => {});
+        }
+      }
     } else if (imageBuffer) {
       const form = new FormData();
       form.append('chat_id', targetChat);

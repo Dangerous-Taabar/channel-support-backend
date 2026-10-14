@@ -1437,6 +1437,26 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
+    // ---- CASE 0.9: Admin uploads an animated GIF / MP4 directly to the bot in DM ----
+    if (msg.chat.type === 'private' && (msg.animation || msg.video || msg.document)) {
+      const isAdmin = await checkIsAdmin(msg.from.id);
+      if (isAdmin) {
+        const anim = msg.animation || msg.video || (msg.document && msg.document.mime_type && msg.document.mime_type.includes('video') ? msg.document : null);
+        if (anim) {
+          let theme = 'navratri';
+          try {
+            const raw = await redisCommand(['GET', 'settings']);
+            if (raw) theme = JSON.parse(raw).seasonTheme || 'navratri';
+          } catch (e) {}
+
+          await redisCommand(['SET', 'latest_card_anim_' + theme, anim.file_id]);
+          await redisCommand(['SET', 'latest_card_anim_default', anim.file_id]);
+          await tgSendText(msg.chat.id, `✅ Badiya! Yeh animated GIF ab <b>${theme.toUpperCase()}</b> season card ke liye save ho gayi hai!\n\nAb group me /preview likhoge toh yahi GIF card aayega!`, {}, 'HTML');
+          return;
+        }
+      }
+    }
+
     // ---- CASE 1: Private DM to the bot (e.g. /start) ----
     if (msg.chat.type === 'private') {
       const userId = msg.from.id;
@@ -1539,6 +1559,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
         let cachedAnimFileId = null;
         try {
           cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_' + theme]);
+          if (!cachedAnimFileId) cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_default']);
           if (!cachedAnimFileId) cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_navratri']) || await redisCommand(['GET', 'latest_card_anim_diwali']);
         } catch (e) {}
 

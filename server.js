@@ -1555,12 +1555,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
         const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
 
-        // Check if we have an animation file_id cached for this theme
+        // Check if we have an animation file_id cached specifically for this active theme
         let cachedAnimFileId = null;
         try {
           cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_' + theme]);
-          if (!cachedAnimFileId) cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_default']);
-          if (!cachedAnimFileId) cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_navratri']) || await redisCommand(['GET', 'latest_card_anim_diwali']);
         } catch (e) {}
 
         if (cachedAnimFileId) {

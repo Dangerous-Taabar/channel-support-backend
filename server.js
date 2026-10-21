@@ -237,6 +237,16 @@ app.post('/api/support/start', async (req, res) => {
   const { deviceId } = req.body || {};
   if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
 
+  // Server-side 12-hour lock: the page disables the button too, but the browser alone is never trusted.
+  try {
+    const rawRec = await redisCommand(['GET', 'supporter:' + deviceId]);
+    const rec = rawRec ? JSON.parse(rawRec) : null;
+    if (rec && isCurrentlyActive(rec)) {
+      const left = rec.lastSupportAt + (rec.testCooldownMs || SUPPORT_WINDOW_MS) - Date.now();
+      return res.status(429).json({ error: `Aaj ka support ho chuka hai. Agla support ${formatRemaining(left)} baad.`, retryAfterMs: left });
+    }
+  } catch (e) { /* Redis hiccup: don't block a real supporter */ }
+
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = signToken(sessionId);
   await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false });
@@ -2159,7 +2169,7 @@ app.post('/api/notify/support', async (req, res) => {
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
-  const { id, test, name, username, totalDays, streak, level, title, tierName, xp, theme } = req.body || {};
+  const { id, test, name, username, totalDays, streak, xp } = req.body || {};
 
   // Real numbers come from the saved supporter record, not from whatever the browser claims.
   const devId = (typeof id === 'string' && /^tg_\d+$/.test(id)) ? id : null;
@@ -2171,9 +2181,7 @@ app.post('/api/notify/support', async (req, res) => {
   const d = (rec && rec.totalDays) || totalDays || 1;
   const s = (rec && rec.streak) || streak || 1;
   const who = username ? '@' + username : (certName || 'Someone');
-  const userLvl = level || (d >= 100 ? 8 : d >= 75 ? 7 : d >= 50 ? 6 : d >= 30 ? 5 : d >= 15 ? 4 : d >= 7 ? 3 : d >= 3 ? 2 : 1);
   const userXp = xp || (d * 100);
-  const activeTheme = theme || 'normal';
 
   // Duplicate guard: one post per supporter per total-days value (retried if Telegram failed).
   let lockKey = null;
@@ -2190,43 +2198,19 @@ app.post('/api/notify/support', async (req, res) => {
     } catch (e) { lockKey = null; /* Redis hiccup: better to post than to stay silent */ }
   }
 
-  let caption = '';
-  let buttonText = '🚀 Unlock VIP Pass';
-
-  if (activeTheme === 'diwali') {
-    buttonText = '🪔 Claim Diwali Pass';
-    caption =
-      `🪔 <b>SHUBH DEEPAWALI!</b> 🪔\n` +
-      `👑 <b>DIWALI SPECIAL VIP PASS CLAIMED!</b>\n\n` +
-      `⚡ <b>${who}</b> ne Festival Support complete kiya!\n\n` +
-      `🏆 <b>Title:</b> ${title || 'Diwali Shrestha Patron'}\n` +
-      `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName || 'Grandmaster VIP'}\n` +
-      `🔥 <b>Streak:</b> ${s} Days Unstoppable!\n` +
-      `✨ <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
-      `🪔 <b>Edition:</b> Deepawali Mahotsav 2026 [Verified]\n\n` +
-      `👇 <i>Tum bhi apna Diwali VIP Pass unlock karo:</i>`;
-  } else if (activeTheme === 'navratri') {
-    buttonText = '🚩 Claim Shakti Pass';
-    caption =
-      `🚩 <b>JAI MATA DI!</b> 🚩\n` +
-      `⚡ <b>NAVRATRI SHAKTI PASS UNLOCKED!</b>\n\n` +
-      `👑 <b>${who}</b> ne Navratri Special Support claim kiya!\n\n` +
-      `🏆 <b>Title:</b> ${title || 'Navratri Shakti Yoddha'}\n` +
-      `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName || 'Shakti Patron'}\n` +
-      `🔥 <b>Streak:</b> ${s} Days Fire Streak!\n` +
-      `💎 <b>Supporter Aura:</b> ${userXp.toLocaleString()} XP\n` +
-      `🚩 <b>Edition:</b> Navratri Special Edition [Verified]\n\n` +
-      `👇 <i>Tum bhi apna Shakti Pass claim karo:</i>`;
-  } else {
-    caption =
-      `👑 <b>ROYAL VIP LEVEL UP!</b> 👑\n\n` +
-      `⚡ <b>${who}</b> reached <b>LEVEL ${userLvl} — ${tierName || 'Grandmaster VIP'}</b>!\n\n` +
-      `🏆 <b>Rank Title:</b> ${title || 'Maha Yoddha (Shahi Patron)'}\n` +
-      `🔥 <b>Streak:</b> ${s} Days Unbroken!\n` +
-      `💎 <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
-      `🎖️ <b>Status:</b> Verified Royal Member\n\n` +
-      `👇 <i>Tum bhi apna VIP Card unlock karo:</i>`;
-  }
+  // Caption matches the certificate image (same tier, days and streak) — no festival editions.
+  const tierKey = tierForDays(d);
+  const tierLabel = tierKey.charAt(0).toUpperCase() + tierKey.slice(1);
+  const tierIcon = tierKey === 'platinum' ? '💎' : tierKey === 'gold' ? '🥇' : '🥈';
+  const buttonText = '🏅 Claim your Certificate';
+  const caption =
+    `${tierIcon} <b>CERTIFICATE OF SUPPORT</b> ${tierIcon}\n\n` +
+    `⚡ <b>${who}</b> ne aaj support complete kiya!\n\n` +
+    `🎖️ <b>Tier:</b> ${tierLabel}\n` +
+    `📅 <b>Total Days:</b> ${d}\n` +
+    `🔥 <b>Streak:</b> ${s} din\n` +
+    `💠 <b>Supporter XP:</b> ${userXp.toLocaleString()}\n\n` +
+    `👇 <i>Tum bhi apna Certificate of Support claim karo:</i>`;
 
   const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
   const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };

@@ -1,0 +1,2501 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Channel Support Center</title>
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='26' fill='%230b0912'/%3E%3Cpath d='M50 20 L62 42 L86 46 L68 63 L72 87 L50 76 L28 87 L32 63 L14 46 L38 42 Z' fill='%23ff3d8a'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='26' fill='%230b0912'/%3E%3Cpath d='M50 20 L62 42 L86 46 L68 63 L72 87 L50 76 L28 87 L32 63 L14 46 L38 42 Z' fill='%23ff3d8a'/%3E%3C/svg%3E">
+
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0b0912">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Support Center">
+
+<meta name="description" content="Channel ko support karo, apni streak banao, aur verified supporter certificate unlock karo.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Channel Support Center">
+<meta property="og:description" content="Channel ko support karo, apni streak banao, aur verified supporter certificate unlock karo.">
+<meta property="og:url" content="https://channel-support.pages.dev/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Channel Support Center">
+<meta name="twitter:description" content="Channel ko support karo, apni streak banao, aur verified supporter certificate unlock karo.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Orbitron:wght@600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --bg:#0b0912;
+  --surface:#12101d;
+  --surface-2:#191527;
+  --line:#272037;
+  --line-soft:#1e1930;
+  --text:#edeaf6;
+  --text-2:#b3abc9;
+  --muted:#7d7597;
+  --accent:#ff3d8a;
+  --accent-soft:#ff3d8a1f;
+  --violet:#8b5cf6;
+  --gold:#ffc53d;
+  --green:#34d399;
+  --amber:#f59e0b;
+  --r-sm:8px; --r:12px; --r-lg:18px;
+  --sans:'Inter',system-ui,-apple-system,sans-serif;
+  --display:'Bricolage Grotesque','Inter',sans-serif;
+  --shadow:0 1px 2px #00000040, 0 8px 24px -12px #00000080;
+  --nav-h:60px; --tab-h:64px; --side-w:248px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--sans);
+  font-size:15px; line-height:1.55; min-height:100dvh; overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent);color:#fff}
+*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:99px}
+::-webkit-scrollbar-track{background:transparent}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+img{max-width:100%;display:block}
+
+/* ---------- App shell ---------- */
+.app{display:flex;min-height:100dvh}
+
+.sidebar{
+  width:var(--side-w); flex-shrink:0; border-right:1px solid var(--line-soft);
+  background:var(--surface); display:flex; flex-direction:column; padding:16px 14px 20px;
+  position:fixed; top:0; left:0; height:100dvh; z-index:110; overflow-y:auto;
+  transform:translateX(-100%); transition:transform .28s cubic-bezier(.22,1,.36,1);
+}
+.sidebar.open{transform:translateX(0); box-shadow:28px 0 60px -30px #000000a0;}
+.sidebar-backdrop{
+  position:fixed; inset:0; background:#0b0912b3; backdrop-filter:blur(2px); z-index:105;
+  opacity:0; visibility:hidden; transition:opacity .25s;
+}
+.sidebar-backdrop.show{opacity:1; visibility:visible;}
+.sidebar-close{
+  display:flex; align-self:flex-end; width:30px; height:30px; border-radius:9px; border:1px solid var(--line);
+  background:var(--surface-2); color:var(--text-2); align-items:center; justify-content:center; cursor:pointer; margin-bottom:8px;
+}
+.sidebar-close svg{width:15px;height:15px}
+.brand{display:flex;align-items:center;gap:11px;padding:6px 8px 20px;cursor:pointer}
+.brand-mark{width:34px;height:34px;border-radius:10px;overflow:hidden;background:var(--surface-2);display:grid;place-items:center;flex-shrink:0;border:1px solid var(--line)}
+.brand-mark img{width:100%;height:100%;object-fit:cover}
+.brand-name{font-family:var(--display);font-weight:800;font-size:15px;letter-spacing:-.01em;line-height:1.15}
+.brand-sub{font-size:11px;color:var(--muted);line-height:1.2}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav-item{
+  display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--r);
+  color:var(--text-2);font-size:14px;font-weight:500;cursor:pointer;border:none;background:none;
+  width:100%;text-align:left;font-family:inherit;transition:background .15s,color .15s;
+}
+.nav-item:hover{background:var(--surface-2);color:var(--text)}
+.nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item svg{width:17px;height:17px;flex-shrink:0}
+.nav-group-label{font-size:11px;color:var(--muted);padding:16px 11px 6px;font-weight:600}
+.side-foot{margin-top:auto;padding-top:14px;border-top:1px solid var(--line-soft)}
+.user-chip{display:flex;align-items:center;gap:10px;padding:8px;border-radius:var(--r)}
+.user-chip .avatar{width:32px;height:32px}
+.user-chip-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-chip-meta{font-size:11px;color:var(--muted)}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+.topbar{
+  position:sticky;top:0;z-index:40;height:var(--nav-h);display:flex;align-items:center;
+  justify-content:space-between;gap:12px;padding:0 16px;
+  background:#0b0912e6;backdrop-filter:blur(12px);border-bottom:1px solid var(--line-soft);
+}
+.topbar-title{font-family:var(--display);font-weight:700;font-size:17px;letter-spacing:-.01em}
+.topbar-actions{display:flex;align-items:center;gap:8px}
+.icon-btn{
+  width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--surface);
+  color:var(--text-2);display:grid;place-items:center;cursor:pointer;transition:background .15s,color .15s;
+}
+.icon-btn:hover{background:var(--surface-2);color:var(--text)}
+.icon-btn svg{width:16px;height:16px}
+
+.content{flex:1;padding:22px 16px calc(var(--tab-h) + 28px);max-width:1140px;width:100%;margin:0 auto}
+
+.tabbar{
+  position:fixed;left:0;right:0;bottom:0;z-index:50;height:var(--tab-h);
+  display:grid;grid-template-columns:repeat(5,1fr);align-items:center;
+  background:#100e1af2;backdrop-filter:blur(14px);border-top:1px solid var(--line-soft);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.tab{
+  display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;
+  color:var(--muted);font-family:inherit;font-size:10.5px;font-weight:600;cursor:pointer;padding:6px 2px;
+}
+.tab svg{width:20px;height:20px}
+.tab.active{color:var(--accent)}
+
+@media(min-width:1000px){
+  .sidebar{position:sticky; top:0; transform:none; box-shadow:none; z-index:1}
+  .sidebar-backdrop, .sidebar-close, .hamburger-btn{display:none}
+  .tabbar{display:none}
+  .content{padding:28px 32px 60px}
+  .topbar{padding:0 32px}
+  .topbar .menu-brand{display:none}
+}
+@media(max-width:999px){
+  .topbar .topbar-title{display:none}
+  .topbar .menu-brand{display:flex}
+}
+
+/* ---------- Primitives ---------- */
+.panel{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r-lg);padding:18px}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.panel-title{font-size:14px;font-weight:600;letter-spacing:-.01em}
+.panel-note{font-size:12px;color:var(--muted)}
+.section-title{font-family:var(--display);font-size:20px;font-weight:700;letter-spacing:-.02em;margin-bottom:4px}
+.section-sub{font-size:13.5px;color:var(--text-2);margin-bottom:18px;max-width:62ch}
+
+.btn{
+  font-family:var(--sans);font-weight:600;font-size:14px;border-radius:var(--r);cursor:pointer;
+  padding:11px 18px;border:1px solid transparent;display:inline-flex;align-items:center;justify-content:center;
+  gap:8px;transition:background .15s,border-color .15s,opacity .15s;text-decoration:none;
+}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:not(:disabled):hover{background:#ff5b9d}
+.btn-primary:disabled{background:var(--surface-2);color:var(--muted);border-color:var(--line)}
+.btn-secondary{background:var(--surface-2);color:var(--text);border-color:var(--line)}
+.btn-secondary:not(:disabled):hover{background:#221c35}
+.btn-ghost{background:transparent;color:var(--text-2)}
+.btn-ghost:hover{color:var(--text);background:var(--surface-2)}
+.btn-gold{background:var(--gold);color:#241a00}
+.btn-gold:hover{background:#ffd260}
+.btn-sm{padding:7px 12px;font-size:12.5px;border-radius:var(--r-sm)}
+.btn-block{width:100%}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+
+input[type=text],input[type=search]{
+  width:100%;padding:10px 13px;border-radius:var(--r);border:1px solid var(--line);
+  background:var(--surface-2);color:var(--text);font-family:inherit;font-size:14px;
+}
+input::placeholder{color:var(--muted)}
+input:focus{outline:none;border-color:var(--accent)}
+label.field{display:block;font-size:12.5px;color:var(--text-2);margin-bottom:6px;font-weight:500}
+
+.avatar{
+  width:40px;height:40px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);
+  display:grid;place-items:center;font-weight:700;font-size:15px;overflow:hidden;flex-shrink:0;color:var(--text-2);
+}
+.avatar img{width:100%;height:100%;object-fit:cover}
+
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--text-2)}
+.pill.green{color:var(--green);border-color:#34d39940;background:#34d3991a}
+.pill.amber{color:var(--amber);border-color:#f59e0b40;background:#f59e0b1a}
+.pill.accent{color:var(--accent);border-color:#ff3d8a40;background:var(--accent-soft)}
+.pill.gold{color:var(--gold);border-color:#ffc53d40;background:#ffc53d1a}
+.pill.violet{color:#a78bfa;border-color:#8b5cf640;background:#8b5cf61a}
+
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.dot.pulse{animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+.grid{display:grid;gap:14px;align-items:start}
+.muted{color:var(--muted)}
+.num{font-family:var(--display);font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+
+/* ---------- Stat cards ---------- */
+.stat-row{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+@media(min-width:720px){.stat-row{grid-template-columns:repeat(4,1fr)}}
+.stat{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r-lg);padding:15px}
+.stat-label{font-size:12px;color:var(--muted);font-weight:500;display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.stat-value{font-family:var(--display);font-weight:800;font-size:30px;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.stat-foot{font-size:11.5px;color:var(--muted);margin-top:7px}
+
+/* ---------- Streak hero ---------- */
+.streak-panel{
+  background:
+    radial-gradient(520px 200px at 100% 0%, #ff3d8a1a, transparent 70%),
+    var(--surface);
+  border:1px solid var(--line-soft);border-radius:var(--r-lg);padding:22px;
+  display:grid;gap:18px;
+}
+@media(min-width:720px){.streak-panel{grid-template-columns:1.1fr 1fr;align-items:center}}
+.streak-figure{display:flex;align-items:baseline;gap:10px}
+.streak-figure .n{font-family:var(--display);font-weight:800;font-size:64px;line-height:.9;letter-spacing:-.045em;font-variant-numeric:tabular-nums}
+.streak-figure .u{font-size:14px;color:var(--text-2);font-weight:600}
+.streak-cap{font-size:13px;color:var(--text-2);margin-top:8px;max-width:38ch}
+
+.progress{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:10px}
+.progress span{display:block;height:100%;border-radius:99px;background:var(--accent);transition:width .6s cubic-bezier(.22,1,.36,1)}
+.progress.gold span{background:var(--gold)}
+
+/* ---------- Lists / rows ---------- */
+.row{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.row:last-child{border-bottom:none}
+.row-main{flex:1;min-width:0}
+.row-title{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-sub{font-size:11.5px;color:var(--muted)}
+.row-val{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-2)}
+.rank{
+  width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;
+  background:var(--surface-2);color:var(--muted);flex-shrink:0;font-variant-numeric:tabular-nums;
+}
+.rank.r1{background:#ffc53d1f;color:var(--gold)}
+.rank.r2{background:#cbd5e11f;color:#cbd5e1}
+.rank.r3{background:#f973161f;color:#fb923c}
+.row.me{background:var(--accent-soft);margin:0 -10px;padding:9px 10px;border-radius:var(--r);border-bottom:none}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:0 10px 9px 0;border-bottom:1px solid var(--line-soft)}
+td{padding:10px 10px 10px 0;border-bottom:1px solid var(--line-soft);color:var(--text-2)}
+td:first-child{color:var(--text);font-weight:500}
+tr:last-child td{border-bottom:none}
+
+/* ---------- Heatmap ---------- */
+.heatmap{display:grid;grid-template-rows:repeat(7,12px);grid-auto-flow:column;grid-auto-columns:12px;gap:3px;justify-content:start;overflow-x:auto;padding-bottom:4px}
+.cell{width:12px;height:12px;border-radius:3px;background:var(--surface-2)}
+.cell.on{background:var(--accent)}
+.cell.today{box-shadow:0 0 0 1.5px var(--text-2)}
+
+/* ---------- Chart ---------- */
+.chart{display:flex;align-items:flex-end;gap:4px;height:140px;margin-top:6px}
+.chart-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.chart-bar{width:100%;max-width:26px;border-radius:5px 5px 2px 2px;background:var(--violet);min-height:3px;transition:height .5s cubic-bezier(.22,1,.36,1)}
+.chart-bar.hi{background:var(--accent)}
+.chart-x{font-size:9.5px;color:var(--muted);white-space:nowrap}
+
+/* ---------- Steps ---------- */
+.steps{display:flex;flex-direction:column;gap:2px;margin-bottom:18px}
+.step{display:flex;gap:12px;padding:12px;border-radius:var(--r);border:1px solid transparent}
+.step .sn{width:24px;height:24px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--muted);flex-shrink:0}
+.step b{font-size:13.5px;display:block}
+.step span{font-size:12px;color:var(--muted)}
+.step.active{border-color:var(--line);background:var(--surface-2)}
+.step.done .sn{background:var(--green);border-color:var(--green);color:#052e1c}
+.step.done b{color:var(--green)}
+
+/* ---------- Skeleton / states ---------- */
+.skel{height:44px;border-radius:var(--r);background:linear-gradient(90deg,var(--surface-2) 25%,#221c35 50%,var(--surface-2) 75%);background-size:200% 100%;animation:shimmer 1.4s linear infinite;margin-bottom:8px}
+@keyframes shimmer{to{background-position:-200% 0}}
+.empty{text-align:center;padding:26px 14px;color:var(--muted);font-size:13px}
+.empty b{display:block;color:var(--text-2);font-size:14px;margin-bottom:4px;font-weight:600}
+.err{border:1px solid #f43f5e40;background:#f43f5e14;border-radius:var(--r);padding:12px 14px;font-size:13px;color:#fda4af;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+
+/* ---------- Toast ---------- */
+.toast{
+  position:fixed;left:50%;transform:translate(-50%,120%);bottom:calc(var(--tab-h) + 16px);z-index:200;
+  opacity:0;visibility:hidden;pointer-events:none;
+  background:var(--surface-2);border:1px solid var(--line);color:var(--text);
+  padding:11px 16px;border-radius:var(--r);font-size:13.5px;font-weight:500;box-shadow:var(--shadow);
+  transition:transform .3s cubic-bezier(.22,1,.36,1),opacity .2s,visibility .2s;max-width:90vw;text-align:center;
+}
+.toast.show{transform:translate(-50%,0);opacity:1;visibility:visible}
+@media(min-width:1000px){.toast{bottom:24px}}
+
+/* ---------- Modal ---------- */
+.modal{position:fixed;inset:0;z-index:300;background:#0b0912cc;backdrop-filter:blur(6px);display:grid;place-items:center;padding:24px}
+.modal-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:26px;max-width:340px;width:100%;text-align:center;box-shadow:var(--shadow)}
+
+/* ---------- Screens ---------- */
+.screen{display:none}
+.screen.active{display:block}
+.stack{display:flex;flex-direction:column;gap:14px}
+
+/* ---------- Landing ---------- */
+.landing{max-width:600px;margin:0 auto;padding:6vh 0 40px}
+.landing-mark{width:64px;height:64px;border-radius:20px;overflow:hidden;background:var(--surface-2);border:1px solid var(--line);display:grid;place-items:center;margin-bottom:22px}
+.landing-mark img{width:100%;height:100%;object-fit:cover}
+.landing h1{font-family:var(--display);font-weight:800;font-size:clamp(30px,7vw,44px);line-height:1.05;letter-spacing:-.035em;margin-bottom:14px}
+.landing p.lede{font-size:15.5px;color:var(--text-2);max-width:48ch;margin-bottom:26px}
+.live-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-soft);border:1px solid var(--line-soft);border-radius:var(--r-lg);overflow:hidden;margin:26px 0}
+.live-stat{background:var(--surface);padding:16px 14px}
+.live-stat .v{font-family:var(--display);font-weight:800;font-size:24px;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.live-stat .k{font-size:11.5px;color:var(--muted);margin-top:2px}
+.how{display:flex;flex-direction:column;gap:14px;margin:26px 0}
+.how-item{display:flex;gap:13px}
+.how-item .i{width:28px;height:28px;border-radius:9px;background:var(--surface-2);border:1px solid var(--line);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--accent);flex-shrink:0}
+.how-item b{font-size:14px;display:block;margin-bottom:2px}
+.how-item span{font-size:13px;color:var(--text-2)}
+
+/* ---------- 3D Holographic VIP Card ---------- */
+.vip-card-container {
+  perspective: 1000px;
+  position: relative;
+  margin-bottom: 18px;
+  border-radius: var(--r-lg);
+  display: block;
+}
+.vip-card-inner {
+  position: relative;
+  border-radius: var(--r-lg);
+  transform-style: preserve-3d;
+  transition: transform 0.1s ease-out, box-shadow 0.25s ease;
+  box-shadow: 0 16px 45px -10px rgba(0,0,0,0.85), 0 0 35px -5px rgba(255, 140, 0, 0.35);
+  overflow: hidden;
+}
+.vip-card-glare {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  border-radius: var(--r-lg);
+  background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.3) 0%, transparent 65%);
+  opacity: 0;
+  mix-blend-mode: overlay;
+  transition: opacity 0.2s ease;
+}
+.vip-card-container:hover .vip-card-glare {
+  opacity: 1;
+}
+#certImg{width:100%;border-radius:var(--r-lg);border:1px solid rgba(255,215,0,0.25);display:block;background:#05010a;transition:opacity .3s}
+#confetti{position:fixed;inset:0;pointer-events:none;z-index:250}
+
+#boot{position:fixed;inset:0;z-index:500;background:var(--bg);display:grid;place-items:center;transition:opacity .35s}
+#boot.hide{opacity:0;pointer-events:none}
+.boot-spin{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body>
+<div id="boot"><div class="boot-spin"></div></div>
+<canvas id="confetti"></canvas>
+
+<div class="app">
+
+  <!-- ============ SIDEBAR (desktop: static · mobile: slide-in drawer) ============ -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
+  <aside class="sidebar" id="sidebar">
+    <button class="sidebar-close" onclick="closeSidebar()" aria-label="Menu band karo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="brand" onclick="go(Home())">
+      <div class="brand-mark" id="brandMark"></div>
+      <div>
+        <div class="brand-name">Support Center</div>
+        <div class="brand-sub" id="brandSub">Channel supporters</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="navMain"></nav>
+    <div id="navAdminGroup"></div>
+
+    <div class="side-foot">
+      <div class="user-chip" id="sideUser"></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- ============ TOPBAR ============ -->
+    <header class="topbar">
+      <div class="menu-brand" style="display:flex;align-items:center;gap:10px">
+        <button class="icon-btn hamburger-btn" onclick="toggleSidebar()" aria-label="Menu kholo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="brand" style="padding:0;cursor:pointer" onclick="go(Home())">
+          <div class="brand-mark" id="brandMarkSm" style="width:28px;height:28px;border-radius:9px"></div>
+          <div class="brand-name" style="font-size:14px">Support Center</div>
+        </div>
+      </div>
+      <div class="topbar-title" id="pageTitle">Dashboard</div>
+      <div class="topbar-actions">
+        <span class="pill" id="syncPill" title="Data status"><span class="dot"></span><span id="syncText">Syncing</span></span>
+        <button class="icon-btn" onclick="joinChannel()" title="Telegram channel kholo" aria-label="Telegram channel">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71l-4.14-3.05-2 1.92c-.23.23-.42.42-.82.42z"/></svg>
+        </button>
+        <button class="icon-btn" id="refreshBtn" onclick="manualRefresh()" title="Data refresh karo" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ============ LANDING ============ -->
+      <section class="screen" id="s-home">
+        <div class="landing">
+          <div class="landing-mark" id="landingMark"></div>
+          <h1>Channel ko support karo,<br>apni streak banao.</h1>
+          <p class="lede">Har support par tumhara streak badhta hai, rank upar jaati hai, aur ek verified certificate milta hai jo group me share kar sakte ho. Paisa kuch nahi lagta — sirf 3 minute.</p>
+          <button class="btn btn-primary" style="padding:13px 22px" onclick="startJourney()">Telegram se shuru karo</button>
+
+          <div class="live-stats" id="landingStats">
+            <div class="live-stat"><div class="v">—</div><div class="k">Supporters</div></div>
+            <div class="live-stat"><div class="v">—</div><div class="k">Aaj active</div></div>
+            <div class="live-stat"><div class="v">—</div><div class="k">Total supports</div></div>
+          </div>
+
+          <div class="how">
+            <div class="how-item"><div class="i">1</div><div><b>Telegram se connect karo</b><span>Naam khud aa jayega, koi form nahi.</span></div></div>
+            <div class="how-item"><div class="i">2</div><div><b>Support link ke steps poore karo</b><span>Lagbhag 3 minute. Har 12 ghante me ek baar.</span></div></div>
+            <div class="how-item"><div class="i">3</div><div><b>Certificate share karo</b><span>Streak, rank aur tier ke saath — group me.</span></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CONNECT ============ -->
+      <section class="screen" id="s-connect">
+        <div class="landing" style="padding-top:4vh">
+          <h1 style="font-size:clamp(26px,6vw,34px)">Telegram se connect karo</h1>
+          <p class="lede">Telegram khud confirm karega ki account tumhara hai. Isse koi doosra tumhare naam se streak nahi bana sakta, aur naya device khole to bhi tumhara data wahi rehta hai.</p>
+          <div id="supporterWidget" style="margin-bottom:18px"></div>
+          <p class="panel-note" id="connectNote"></p>
+        </div>
+      </section>
+
+      <!-- ============ DASHBOARD ============ -->
+      <section class="screen" id="s-dashboard">
+        <div id="dashError"></div>
+        <div class="stack">
+          <div class="streak-panel">
+            <div>
+              <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px">
+                <div class="avatar" id="dashAvatar"></div>
+                <div>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-size:15px;font-weight:600" id="dashName">—</span>
+                    <span class="pill gold" id="premiumPill" style="display:none">👑 Premium</span>
+                  </div>
+                  <div style="font-size:12px;color:var(--muted)" id="dashRank">Rank load ho raha hai</div>
+                </div>
+              </div>
+              <div class="streak-figure"><span class="n" id="streakNum">0</span><span class="u">din ka streak</span></div>
+              <p class="streak-cap" id="streakCap">Support complete karke streak shuru karo.</p>
+              <p class="panel-note" id="premiumProgress" style="margin-top:6px"></p>
+            </div>
+            <div>
+              <div class="panel" style="background:var(--surface-2);border-color:var(--line)">
+                <div class="panel-head" style="margin-bottom:10px">
+                  <span class="panel-title" id="todayTitle">Aaj ka support</span>
+                  <span class="pill" id="todayPill"><span class="dot"></span><span>—</span></span>
+                </div>
+                <p class="panel-note" id="todayNote" style="margin-bottom:13px">Status check ho raha hai…</p>
+                <button class="btn btn-primary btn-block" id="supportBtn" onclick="go('/support')">Support complete karo</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="stat-row" id="dashStats"></div>
+
+          <div class="grid" style="grid-template-columns:1fr">
+            <div class="panel">
+              <div class="panel-head">
+                <span class="panel-title" id="tierName">Tier</span>
+                <span class="pill gold" id="tierPill">—</span>
+              </div>
+              <p class="panel-note" id="tierNote">—</p>
+              <div class="progress gold"><span id="tierBar" style="width:0%"></span></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <span class="panel-title">Support calendar</span>
+              <span class="panel-note">Pichle 13 hafte</span>
+            </div>
+            <div class="heatmap" id="heatmap"></div>
+          </div>
+
+          <div class="grid" id="dashSplit" style="grid-template-columns:1fr">
+            <div class="panel">
+              <div class="panel-head">
+                <span class="panel-title">Top supporters</span>
+                <button class="btn btn-ghost btn-sm" onclick="go('/leaderboard')">Poori list</button>
+              </div>
+              <div id="dashTop"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <span class="panel-title">Recent activity</span>
+                <button class="btn btn-ghost btn-sm" onclick="go('/activity')">Sab dekho</button>
+              </div>
+              <div id="dashActivity"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <span class="panel-title">Apna invite link</span>
+              <span class="pill" id="refPill">0 invites</span>
+            </div>
+            <p class="panel-note" style="margin-bottom:11px">Dost is link se pehli baar connect kare to tumhe credit milta hai.</p>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="refInput" readonly aria-label="Referral link">
+              <button class="btn btn-secondary btn-sm" onclick="copyRef()">Copy</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><span class="panel-title">VIP Supporter Pass</span></div>
+            <p class="panel-note" style="margin-bottom:13px" id="certNote">Ek support complete karne ke baad VIP Pass unlock ho jata hai.</p>
+            <button class="btn btn-secondary" id="certBtn" onclick="openCertificate()">VIP Pass kholo</button>
+          </div>
+
+          <button class="btn btn-ghost btn-sm" style="align-self:flex-start" onclick="supporterLogout()">Logout</button>
+        </div>
+      </section>
+
+      <!-- ============ SUPPORT FLOW ============ -->
+      <section class="screen" id="s-support">
+        <div class="section-title">Support complete karo</div>
+        <p class="section-sub">Link isi tab me khulega. Steps poore karte hi yeh page apne aap wapas aa jayega aur streak +1 ho jayega.</p>
+        <div class="panel" style="max-width:520px">
+          <div class="steps" id="steps">
+            <div class="step active" data-step="1"><div class="sn">1</div><div><b>Support link kholo</b><span>Shortlink ke steps poore karo</span></div></div>
+            <div class="step" data-step="2"><div class="sn">2</div><div><b>Verify</b><span>Wapas aate hi apne aap check hoga</span></div></div>
+            <div class="step" data-step="3"><div class="sn">3</div><div><b>Ho gaya</b><span>Streak +1, certificate update</span></div></div>
+          </div>
+          <button class="btn btn-primary btn-block" id="flowBtn" onclick="advanceFlow()">Support link kholo</button>
+          <p class="panel-note" id="flowHint" style="margin-top:11px">Har 12 ghante me ek baar support count hota hai.</p>
+        </div>
+      </section>
+
+      <!-- ============ LEADERBOARD ============ -->
+      <section class="screen" id="s-leaderboard">
+        <div class="section-title">Leaderboard</div>
+        <p class="section-sub" id="lbSub">Total support days ke hisaab se. Barabar hone par jo pehle shuru kiya wo upar.</p>
+        <div class="btn-row" style="margin-bottom:14px" id="lbPeriodTabs">
+          <button class="btn btn-secondary btn-sm" data-period="all" onclick="setLbPeriod('all')">All-time</button>
+          <button class="btn btn-ghost btn-sm" data-period="week" onclick="setLbPeriod('week')">Is hafte</button>
+          <button class="btn btn-ghost btn-sm" data-period="month" onclick="setLbPeriod('month')">Is mahine</button>
+        </div>
+        <div class="stat-row" id="lbStats" style="margin-bottom:14px"></div>
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Sabhi supporters</span>
+            <input type="search" id="lbSearch" placeholder="Naam se dhundo" oninput="renderLeaderboard()" style="max-width:220px" aria-label="Supporter search">
+          </div>
+          <div id="lbList"></div>
+        </div>
+      </section>
+
+      <!-- ============ ACTIVITY ============ -->
+      <section class="screen" id="s-activity">
+        <div class="section-title">Activity</div>
+        <p class="section-sub">Community me kya chal raha hai — sabse naye supports sabse upar.</p>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head">
+            <span class="panel-title">Daily supports</span>
+            <div class="btn-row">
+              <button class="btn btn-ghost btn-sm" id="r7" onclick="setRange(7)">7 din</button>
+              <button class="btn btn-ghost btn-sm" id="r30" onclick="setRange(30)">30 din</button>
+            </div>
+          </div>
+          <div class="chart" id="pubChart"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">Recent supports</span></div>
+          <div id="activityList"></div>
+        </div>
+      </section>
+
+      <!-- ============ CERTIFICATE OF SUPPORT (Silver / Gold / Platinum — rendered by the backend) ============ -->
+      <section class="screen" id="s-certificate">
+        <div class="section-title">Tumhara Certificate of Support</div>
+        <p class="section-sub" id="certSubtitle">Tumhare support ke hisaab se Silver, Gold ya Platinum certificate:</p>
+        <div style="max-width:760px">
+          <img id="certImg" alt="Certificate of Support" style="min-height:120px">
+          <div class="btn-row" style="margin-top:14px;flex-wrap:wrap">
+            <button class="btn btn-gold" onclick="downloadCert()">🖼️ Certificate Download (HD)</button>
+            <button class="btn btn-primary" onclick="shareToGroup()">Group me Flex Karo</button>
+            <button class="btn btn-secondary" id="btnAdminTestPreview" onclick="triggerAdminTestPreview()" style="display:none;background:#2b1947;border-color:var(--accent);color:#ffe57f">🧪 Test Group Preview</button>
+            <button class="btn btn-ghost" onclick="go('/dashboard')">Wapas</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ ADMIN LOGIN ============ -->
+      <section class="screen" id="s-admin-login">
+        <div class="landing" style="padding-top:4vh;max-width:460px">
+          <h1 style="font-size:clamp(24px,5vw,30px)">Admin sign in</h1>
+          <p class="lede">Sirf wahi log andar aa sakte hai jinhe owner ne admin list me add kiya hai.</p>
+          <div class="panel" id="tgLoginCard">
+            <div id="adminWidget" style="display:flex;justify-content:center"></div>
+            <p class="panel-note" id="adminNote" style="margin-top:12px;text-align:center"></p>
+          </div>
+          <div class="panel" id="demoLoginCard" style="display:none">
+            <label class="field">Telegram ID</label>
+            <input type="text" id="adminIdInput" placeholder="123456789">
+            <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="demoAdminLogin()">Enter</button>
+            <p class="panel-note" style="margin-top:10px">Backend configured nahi hai, isliye demo mode.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ ADMIN PANEL ============ -->
+      <section class="screen" id="s-admin">
+        <div class="panel-head" style="margin-bottom:16px">
+          <div class="panel-note" id="adminWho">—</div>
+          <button class="btn btn-ghost btn-sm" onclick="adminLogout()">Sign out</button>
+        </div>
+
+        <div class="btn-row" style="margin-bottom:16px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px" id="adminTabs">
+          <button class="btn btn-secondary btn-sm" data-tab="overview" onclick="setAdminTab('overview')">Overview</button>
+          <button class="btn btn-ghost btn-sm" data-tab="supporters" onclick="setAdminTab('supporters')">Supporters</button>
+          <button class="btn btn-ghost btn-sm" data-tab="team" onclick="setAdminTab('team')">Team</button>
+          <button class="btn btn-ghost btn-sm" data-tab="settings" onclick="setAdminTab('settings')">Settings</button>
+        </div>
+
+        <div class="admin-tab" id="tab-overview">
+          <div class="stat-row" id="adminStats" style="margin-bottom:14px"></div>
+          <div class="panel" style="margin-bottom:14px">
+            <div class="panel-head">
+              <span class="panel-title" id="chartLabel">Daily supports</span>
+              <div class="btn-row">
+                <button class="btn btn-ghost btn-sm" id="ar7" onclick="setRange(7)">7 din</button>
+                <button class="btn btn-ghost btn-sm" id="ar30" onclick="setRange(30)">30 din</button>
+              </div>
+            </div>
+            <div class="chart" id="adminChart"></div>
+          </div>
+          <div class="grid" id="adminSplit" style="grid-template-columns:1fr">
+            <div class="panel">
+              <div class="panel-head"><span class="panel-title">Top supporters</span></div>
+              <div id="adminTop"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><span class="panel-title">Top referrers</span></div>
+              <div id="adminRefs"></div>
+            </div>
+          </div>
+          <div class="panel" style="margin-top:14px">
+            <div class="panel-head"><span class="panel-title">Admin activity log</span></div>
+            <div id="auditList"></div>
+          </div>
+        </div>
+
+        <div class="admin-tab" id="tab-supporters" style="display:none">
+          <div class="panel">
+            <div class="panel-head">
+              <input type="search" id="admSearch" placeholder="Naam ya username se dhundo" oninput="renderSupportersTable()" style="max-width:280px" aria-label="Supporter search">
+              <button class="btn btn-secondary btn-sm" onclick="exportCSV()">CSV export</button>
+            </div>
+            <div style="overflow-x:auto">
+              <table>
+                <thead><tr><th>Naam</th><th>Streak</th><th>Total days</th><th>Last support</th><th>Status</th><th>Premium</th></tr></thead>
+                <tbody id="admTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-tab" id="tab-team" style="display:none">
+          <div class="panel" id="addAdminCard" style="display:none;margin-bottom:14px">
+            <div class="panel-head"><span class="panel-title">Admin add karo</span><span class="pill violet">Sirf owner</span></div>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="newAdminUsername" placeholder="telegram username (bina @)" aria-label="Telegram username">
+              <button class="btn btn-primary btn-sm" onclick="addAdminByUsername()">Add</button>
+            </div>
+            <p class="panel-note" style="margin-top:9px">Wo apne Telegram account se sign in karke panel me aa payega.</p>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><span class="panel-title">Team</span></div>
+            <div id="adminsList"></div>
+          </div>
+        </div>
+
+        <div class="admin-tab" id="tab-settings" style="display:none">
+          <div class="stack">
+            <div class="panel">
+              <div class="panel-head">
+                <span class="panel-title">Group notifications</span>
+                <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:var(--text-2)">
+                  <input type="checkbox" id="notifyToggle" onchange="toggleNotify()" style="width:18px;height:18px;accent-color:#ff3d8a">
+                  On
+                </label>
+              </div>
+              <p class="panel-note">Support complete hone par bot group me supporter ka naam, total days, streak aur certificate bhejta hai.</p>
+            <div class="panel">
+              <div class="panel-head">
+                <span class="panel-title">Active Season / Festival Mode</span>
+                <span class="pill gold" id="activeSeasonPill">Normal VIP</span>
+              </div>
+              <p class="panel-note" style="margin-bottom:12px">Yahan se festival theme chuno. Telegram bot announcements ke captions aur rank titles turant us festival mode me chalenge.</p>
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <select id="seasonThemeSelect" style="max-width:320px;flex:1;background:var(--surface-2);color:var(--text);border:1px solid var(--line);border-radius:var(--r);padding:8px 12px;font-size:13.5px">
+                  <option value="normal">👑 Normal (Cyber Gold VIP Pass)</option>
+                  <option value="diwali">🪔 Diwali Special (Deepawali Mahotsav 2026)</option>
+                  <option value="navratri">🚩 Navratri Special (Shakti Yoddha Edition)</option>
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="changeSeasonTheme()">Theme Save Karo</button>
+                <button class="btn btn-secondary btn-sm" onclick="openCertificate()">Pass Preview</button>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><span class="panel-title">Channel logo</span></div>
+              <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+                <div class="avatar" id="logoPreview" style="width:52px;height:52px;border-radius:14px"></div>
+                <input type="file" id="logoFileInput" accept="image/png,image/jpeg,image/webp" style="font-size:12px;color:var(--muted)" aria-label="Logo file">
+              </div>
+              <div class="btn-row">
+                <button class="btn btn-secondary btn-sm" onclick="saveLogo()">Logo save karo</button>
+                <button class="btn btn-ghost btn-sm" onclick="resetLogo()">Reset</button>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><span class="panel-title">Service status</span></div>
+              <div id="svcStatus"></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><span class="panel-title">Shortlink earnings</span></div>
+              <p class="panel-note" style="margin-bottom:12px">GPLinks earnings ka koi public API nahi hai, isliye asli ₹ sirf unke dashboard me dikhta hai.</p>
+              <a class="btn btn-secondary btn-sm" href="https://gplinks.com/" target="_blank" rel="noopener">GPLinks dashboard kholo</a>
+            </div>
+
+            <div class="panel" id="dangerZoneCard" style="display:none;border-color:#f43f5e40">
+              <div class="panel-head"><span class="panel-title" style="color:#fda4af">Danger zone</span><span class="pill violet">Sirf owner</span></div>
+              <p class="panel-note" style="margin-bottom:14px">Naya season shuru karne ke liye — dono actions turant aur sabke liye ek saath hote hai, wapas nahi ho sakte.</p>
+              <div class="stack" style="gap:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                  <div style="min-width:200px">
+                    <div style="font-size:13.5px;font-weight:600">Sabka support reset karo</div>
+                    <div class="panel-note">Verified Telegram supporters ka streak/total days/calendar zero ho jayega (naam/username safe rehta hai). Purane "naam dalo" system ke bina-Telegram entries hamesha ke liye hat jayenge.</div>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" style="border-color:#f43f5e60;color:#fda4af" onclick="resetAllSupporters()">Sab reset karo</button>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                  <div style="min-width:200px">
+                    <div style="font-size:13.5px;font-weight:600">Sabko sign out karo</div>
+                    <div class="panel-note">Har khula hua tab (supporters + admins) agli baar load hote hi wapas welcome screen par bhej diya jayega.</div>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" style="border-color:#f43f5e60;color:#fda4af" onclick="forceLogoutAll()">Sab logout karo</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CONFIRM MODAL (danger-zone actions) ============ -->
+      <div class="modal" id="confirmModal" style="display:none">
+        <div class="modal-card">
+          <div style="font-size:34px;line-height:1;margin-bottom:10px">⚠️</div>
+          <div class="section-title" style="font-size:17px" id="confirmTitle">Pakka karna hai?</div>
+          <p class="panel-note" style="margin:8px 0 18px" id="confirmBody"></p>
+          <div class="btn-row" style="justify-content:center">
+            <button class="btn btn-ghost" onclick="closeConfirm()">Cancel</button>
+            <button class="btn btn-primary" style="background:#f43f5e" id="confirmBtn">Haan, karo</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 404 ============ -->
+      <section class="screen" id="s-404">
+        <div class="landing" style="max-width:460px">
+          <h1 style="font-size:clamp(26px,6vw,34px)">Yeh page nahi mila</h1>
+          <p class="lede">Link shayad purana hai ya address me typo hai.</p>
+          <button class="btn btn-primary" onclick="go(Home())">Wapas chalo</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<nav class="tabbar" id="tabbar"></nav>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+const API_BASE_URL       = "https://channel-support-backend.onrender.com";
+const TELEGRAM_BOT_USERNAME = "channelsupport1_bot";
+const TELEGRAM_CHANNEL_LINK = "https://t.me/+Z4yn7Q1fwR5jMTBl";
+const TELEGRAM_GROUP_LINK   = "https://t.me/+zh7BX8PiyHc3NGU9";
+const COOLDOWN_MS        = 12 * 60 * 60 * 1000;   // ek support har 12 ghante
+/** Normally COOLDOWN_MS for everyone — but an admin testing the flow can
+ *  shrink just their OWN account's cooldown via the bot's /testcooldown
+ *  command (server.js sets supporter.testCooldownMs), so they don't have
+ *  to wait 12 real hours between test runs. Nobody else is affected. */
+function cooldownFor(supporter){ return (supporter && supporter.testCooldownMs) || COOLDOWN_MS; }
+const PREMIUM_STREAK_DAYS = 7;                     // lagataar itne din → Premium (Forward Bot deta hai)
+const SHORTLINK_URL      = "https://your-shortlink-provider.com/xxxxx"; // demo mode only
+const SHORTLINK_MIN_SECONDS = 15;
+const POLL_MS            = 20000;
+const CACHE_TTL          = 12000;
+
+const hasBackend = !!API_BASE_URL;
+
+/* =====================================================================
+   STATE
+   ===================================================================== */
+let profile = null;        // { deviceId, name, photoUrl }  — is device ki identity
+let supporter = null;      // { name, username, streak, totalDays, lastSupportAt, ... }
+let currentAdmin = null;
+let pendingReferrer = null;
+let flowStep = 0, flowTimer = null, cooldownTimer = null, pollTimer = null;
+let online = null;
+let adminTab = 'overview';
+let rangeDays = parseInt(localStorage.getItem('_range') || '7', 10);
+
+/* =====================================================================
+   UTILITIES
+   ===================================================================== */
+function esc(s){
+  if(s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function uid(){ return 'u_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=> t.classList.remove('show'), 2800);
+}
+
+function timeAgo(ts){
+  if(!ts) return 'kabhi nahi';
+  const s = Math.floor((Date.now()-ts)/1000);
+  if(s < 60) return 'abhi';
+  if(s < 3600) return Math.floor(s/60) + ' min pehle';
+  if(s < 86400) return Math.floor(s/3600) + ' ghante pehle';
+  const d = Math.floor(s/86400);
+  return d === 1 ? 'kal' : d + ' din pehle';
+}
+function countdown(ms){
+  const t = Math.max(0, Math.ceil(ms/1000));
+  const h = Math.floor(t/3600), m = Math.floor((t%3600)/60), s = t%60;
+  return (h ? h + 'h ' : '') + (m<10 && h ? '0' : '') + m + 'm ' + (s<10?'0':'') + s + 's';
+}
+function dayKey(d){
+  const x = new Date(d);
+  return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0');
+}
+
+/* ---- Weekly / monthly leaderboard windows -----------------------------
+   Anchored to IST regardless of the visitor's own device timezone or the
+   backend's server timezone, so the site's "is hafte" list and the bot's
+   "/top10 — is hafte" always agree on which day the week/month flipped.
+   supportDates entries are 'YYYY-MM-DD' strings (see dayKey above); a
+   supporter's period count is just how many of those fall in the current
+   window — so the "reset" is automatic, there's nothing to clear by hand. */
+function istNow(){ return new Date(Date.now() + 5.5*60*60*1000); }
+function istDayKeyOf(d){ return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0'); }
+function weekKeyOf(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m-1, d));
+  const dow = (dt.getUTCDay()+6)%7; // Mon=0..Sun=6
+  dt.setUTCDate(dt.getUTCDate()-dow);
+  return istDayKeyOf(dt);
+}
+function currentWeekKey(){
+  const now = istNow();
+  const dow = (now.getUTCDay()+6)%7;
+  now.setUTCDate(now.getUTCDate()-dow);
+  return istDayKeyOf(now);
+}
+function currentMonthKey(){ const n = istNow(); return n.getUTCFullYear() + '-' + String(n.getUTCMonth()+1).padStart(2,'0'); }
+function countForWeek(supportDates){ const cur = currentWeekKey(); return (supportDates||[]).filter(ds=>weekKeyOf(ds)===cur).length; }
+function countForMonth(supportDates){ const cur = currentMonthKey(); return (supportDates||[]).filter(ds=>ds.slice(0,7)===cur).length; }
+function periodScore(s, period){
+  if(period==='week') return countForWeek(s.supportDates);
+  if(period==='month') return countForMonth(s.supportDates);
+  return s.totalDays||0;
+}
+
+function countUp(el, to){
+  if(!el) return;
+  const from = parseInt(el.textContent.replace(/\D/g,'')) || 0;
+  if(from === to || Math.abs(to-from) > 500){ el.textContent = to; return; }
+  const t0 = performance.now();
+  (function step(now){
+    const p = Math.min(1, (now-t0)/600);
+    el.textContent = Math.round(from + (to-from) * (1 - Math.pow(1-p,3)));
+    if(p < 1) requestAnimationFrame(step); else el.textContent = to;
+  })(t0);
+}
+function setOnline(ok){
+  if(online === ok) return;
+  online = ok;
+  const pill = document.getElementById('syncPill');
+  const txt  = document.getElementById('syncText');
+  pill.className = 'pill ' + (ok ? 'green' : 'amber');
+  txt.textContent = ok ? 'Live' : 'Offline';
+  pill.querySelector('.dot').className = 'dot' + (ok ? ' pulse' : '');
+}
+
+/* =====================================================================
+   STORAGE LAYER — backend (Upstash via server.js) with a localStorage
+   fallback for personal, device-only data.
+   ===================================================================== */
+const localShim = {
+  get:  async (k,sh)=>{ const r = localStorage.getItem((sh?'shared:':'personal:')+k); return r ? {value:r} : null; },
+  set:  async (k,v,sh)=>{ localStorage.setItem((sh?'shared:':'personal:')+k, v); return true; },
+  list: async (p,sh)=>{ const pre=(sh?'shared:':'personal:')+(p||''); return Object.keys(localStorage).filter(k=>k.startsWith(pre)).map(k=>k.slice(sh?7:9)); }
+};
+
+async function apiPost(path, body){
+  const r = await fetch(API_BASE_URL + path, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if(!r.ok) throw new Error(path + ' failed (' + r.status + ')');
+  return r.json();
+}
+
+/** Shared read. Returns null on any failure — only for non-destructive reads. */
+async function sGet(key, shared){
+  try{ return await sGetStrict(key, shared); }
+  catch(e){ if(shared) setOnline(false); return null; }
+}
+/** Shared read that THROWS on failure — use wherever "null" would wipe real data. */
+async function sGetStrict(key, shared){
+  if(shared && hasBackend){
+    const d = await apiPost('/api/storage/get', {key});
+    setOnline(true);
+    return d.value ? JSON.parse(d.value) : null;
+  }
+  const r = await localShim.get(key, !!shared);
+  return r ? JSON.parse(r.value) : null;
+}
+async function sSet(key, value, shared){
+  try{
+    if(shared && hasBackend){ await apiPost('/api/storage/set', {key, value: JSON.stringify(value)}); setOnline(true); return true; }
+    await localShim.set(key, JSON.stringify(value), !!shared);
+    return true;
+  }catch(e){ setOnline(false); console.error('set failed', key, e); return false; }
+}
+async function sList(prefix, shared){
+  try{
+    if(shared && hasBackend){ const d = await apiPost('/api/storage/list', {prefix}); setOnline(true); return d.keys || []; }
+    return await localShim.list(prefix, !!shared);
+  }catch(e){ setOnline(false); return []; }
+}
+
+/* =====================================================================
+   STORE — one cached, de-duplicated source of truth for every screen.
+   The old page re-fetched the whole supporter list separately for the
+   leaderboard, the ticker, the admin table AND the chart, one key at a
+   time. This fetches once, in parallel, and shares the result.
+   ===================================================================== */
+const Store = {
+  _c: {},        // key -> { at, data }
+  _inflight: {},
+
+  _fresh(k){ const e = this._c[k]; return e && (Date.now()-e.at) < CACHE_TTL ? e.data : null; },
+
+  invalidate(k){ if(k) delete this._c[k]; else this._c = {}; },
+
+  async supporters(force){
+    if(!force){ const f = this._fresh('supporters'); if(f) return f; }
+    if(this._inflight.supporters) return this._inflight.supporters;
+
+    this._inflight.supporters = (async ()=>{
+      try{
+        const keys = await sList('supporter:', true);
+        const out = [];
+        if(keys.length){
+          let values = null;
+          if(hasBackend){
+            // One batch request for every record. Falls back to per-key
+            // reads if the backend hasn't been redeployed with /mget yet.
+            try{ values = (await apiPost('/api/storage/mget', { keys })).values; }catch(e){ values = null; }
+          }
+          if(!values){
+            values = [];
+            for(let i=0; i<keys.length; i+=12){
+              const slice = keys.slice(i, i+12);
+              const part = await Promise.all(slice.map(async k => {
+                const v = await sGet(k, true); return v ? JSON.stringify(v) : null;
+              }));
+              values.push(...part);
+            }
+          }
+          values.forEach((raw, j)=>{
+            if(!raw) return;
+            try{ out.push({ ...JSON.parse(raw), _key: keys[j] }); }catch(e){}
+          });
+        }
+        out.sort((a,b)=> (b.totalDays||0)-(a.totalDays||0) || (a.firstSupportAt||Infinity)-(b.firstSupportAt||Infinity));
+        this._c.supporters = { at: Date.now(), data: out };
+        setOnline(true);
+        return out;
+      }catch(e){
+        setOnline(false);
+        const stale = this._c.supporters;
+        return stale ? stale.data : [];   // stale beats blank
+      }finally{
+        delete this._inflight.supporters;
+      }
+    })();
+    return this._inflight.supporters;
+  },
+
+  async settings(force){
+    if(!force){ const f = this._fresh('settings'); if(f) return f; }
+    const s = await sGet('settings', true) || {};
+    this._c.settings = { at: Date.now(), data: s };
+    return s;
+  },
+
+  async branding(force){
+    if(!force){ const f = this._fresh('branding'); if(f) return f; }
+    const b = await sGet('branding', true);
+    this._c.branding = { at: Date.now(), data: b };
+    return b;
+  }
+};
+
+/** Community-wide numbers derived from the real supporter records. */
+function communityStats(list){
+  const today = dayKey(Date.now());
+  let totalSupports = 0, todaySupports = 0, activeNow = 0, streakSum = 0;
+  list.forEach(s=>{
+    totalSupports += (s.totalDays||0);
+    if(s.lastSupportAt && (Date.now()-s.lastSupportAt) < cooldownFor(s)) activeNow++;
+    if((s.supportDates||[]).includes(today)) todaySupports++;
+    streakSum += (s.streak||0);
+  });
+  return { people: list.length, totalSupports, todaySupports, activeNow, streakSum };
+}
+
+/* =====================================================================
+   ICONS + NAVIGATION
+   ===================================================================== */
+const I = {
+  home:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
+  bolt:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+  trophy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/><path d="M10 14h4l.5 6h-5z"/></svg>',
+  pulse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>',
+  award: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><path d="M8.5 13.5 7 22l5-2.5L17 22l-1.5-8.5"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>'
+};
+
+const NAV = [
+  { path:'/dashboard',   label:'Dashboard',   icon:I.home,   tab:true },
+  { path:'/support',     label:'Support',     icon:I.bolt,   tab:true },
+  { path:'/leaderboard', label:'Leaderboard', icon:I.trophy, tab:true },
+  { path:'/activity',    label:'Activity',    icon:I.pulse,  tab:true },
+  { path:'/certificate', label:'VIP Pass',     icon:I.award,  tab:true }
+];
+
+const ROUTES = {
+  '/':'s-home', '/connect':'s-connect', '/dashboard':'s-dashboard', '/support':'s-support',
+  '/leaderboard':'s-leaderboard', '/activity':'s-activity', '/certificate':'s-certificate',
+  '/admin':'s-admin', '/admin/login':'s-admin-login'
+};
+const TITLES = {
+  '/':'Welcome', '/connect':'Connect', '/dashboard':'Dashboard', '/support':'Support',
+  '/leaderboard':'Leaderboard', '/activity':'Activity', '/certificate':'VIP Pass',
+  '/admin':'Admin', '/admin/login':'Admin sign in'
+};
+
+function Home(){ return (profile && profile.name) ? '/dashboard' : '/'; }
+function isAdminSession(){ return !!localStorage.getItem('_currentAdminId'); }
+
+function renderNav(){
+  const cur = location.pathname.replace(/\/$/,'') || '/';
+  const signedIn = !!(profile && profile.name);
+
+  document.getElementById('navMain').innerHTML = signedIn
+    ? NAV.map(n=>`<button class="nav-item ${cur===n.path?'active':''}" onclick="go('${n.path}')">${n.icon}<span>${n.label}</span></button>`).join('')
+    : `<button class="nav-item ${cur==='/'?'active':''}" onclick="go('/')">${I.home}<span>Welcome</span></button>`;
+
+  document.getElementById('navAdminGroup').innerHTML = isAdminSession()
+    ? `<div class="nav-group-label">Staff</div>
+       <button class="nav-item ${cur.startsWith('/admin')?'active':''}" onclick="go('/admin')">${I.shield}<span>Admin panel</span></button>`
+    : '';
+
+  const bar = document.getElementById('tabbar');
+  bar.style.display = signedIn ? '' : 'none';
+  if(signedIn){
+    bar.innerHTML = NAV.filter(n=>n.tab).map(n=>
+      `<button class="tab ${cur===n.path?'active':''}" onclick="go('${n.path}')">${n.icon}<span>${n.label}</span></button>`).join('');
+  }
+
+  const chip = document.getElementById('sideUser');
+  if(signedIn){
+    const av = profile.photoUrl ? `<img src="${esc(profile.photoUrl)}" alt="">` : esc((profile.name||'?').charAt(0).toUpperCase());
+    chip.innerHTML = `<div class="avatar">${av}</div>
+      <div style="min-width:0"><div class="user-chip-name">${esc(profile.name)}</div>
+      <div class="user-chip-meta">${(supporter&&supporter.totalDays)||0} din support</div></div>`;
+  } else {
+    chip.innerHTML = `<button class="btn btn-secondary btn-sm btn-block" onclick="startJourney()">Sign in</button>`;
+  }
+  document.getElementById('pageTitle').textContent = TITLES[cur] || 'Support Center';
+}
+
+function go(path, push=true){
+  closeSidebar();
+  const p = path.replace(/\/$/,'') || '/';
+  if(push) history.pushState({}, '', p);
+  route();
+}
+window.addEventListener('popstate', ()=>route());
+
+/* ---- mobile drawer ---- */
+function openSidebar(){
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebarBackdrop').classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+function closeSidebar(){
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('show');
+  document.body.style.overflow = '';
+}
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.contains('open') ? closeSidebar() : openSidebar();
+}
+document.addEventListener('keydown', e=>{ if(e.key === 'Escape') closeSidebar(); });
+
+function route(){
+  let p = location.pathname.replace(/\/$/,'') || '/';
+
+  if(p.startsWith('/admin') && p !== '/admin/login' && !isAdminSession()){ p = '/admin/login'; history.replaceState({},'',p); }
+  if((p === '/' || p === '/connect') && profile && profile.name){ p = '/dashboard'; history.replaceState({},'',p); }
+  if(['/support','/certificate','/leaderboard','/activity','/dashboard'].includes(p) && !(profile && profile.name)){
+    p = '/'; history.replaceState({},'',p);
+  }
+
+  const id = ROUTES[p] || 's-404';
+  document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active', s.id === id));
+  window.scrollTo(0,0);
+  renderNav();
+
+  if(id === 's-home')        renderLanding();
+  if(id === 's-dashboard')   renderDashboard();
+  if(id === 's-leaderboard') { loadAndRenderLeaderboard(); }
+  if(id === 's-certificate') loadCertificate();
+  if(id === 's-connect')     mountSupporterWidget();
+  if(id === 's-admin-login') mountAdminWidget();
+  if(id === 's-admin')       renderAdmin();
+}
+
+/* =====================================================================
+   BRANDING
+   ===================================================================== */
+let branding = null;
+function applyBranding(){
+  const img = branding && branding.logoData;
+  const mark = img ? `<img src="${branding.logoData}" alt="">` : '<span style="font-size:15px">📺</span>';
+  ['brandMark','brandMarkSm','landingMark'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.innerHTML = mark;
+  });
+  const lp = document.getElementById('logoPreview');
+  if(lp) lp.innerHTML = img ? `<img src="${branding.logoData}" alt="">` : '<span>📺</span>';
+}
+function fileToDataURL(f){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(f); }); }
+async function saveLogo(){
+  const inp = document.getElementById('logoFileInput');
+  if(!inp.files || !inp.files[0]){ toast('Pehle image choose karo'); return; }
+  const f = inp.files[0];
+  if(!/^image\/(png|jpe?g|webp)$/.test(f.type)){ toast('Sirf PNG, JPG ya WEBP chalegi'); return; }
+  if(f.size > 900*1024){ toast('Image 900KB se chhoti honi chahiye'); return; }
+  branding = { logoData: await fileToDataURL(f) };
+  if(await sSet('branding', branding, true)){
+    Store.invalidate('branding'); applyBranding();
+    toast('Logo update ho gaya'); logAdmin('ne channel logo badla');
+  } else toast('Save nahi hua — chhoti image try karo');
+}
+async function resetLogo(){
+  branding = { logoData:null };
+  await sSet('branding', branding, true);
+  Store.invalidate('branding'); applyBranding();
+  toast('Default logo wapas aa gaya'); logAdmin('ne logo reset kiya');
+}
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+async function init(){
+  const ref = new URLSearchParams(location.search).get('ref');
+  if(ref) pendingReferrer = ref;
+
+  try{ branding = await Store.branding(); }catch(e){ setOnline(false); }
+  applyBranding();
+
+  // A "sign everyone out" from the admin panel shows up as a bumped
+  // auth_epoch — catch it before trusting anything cached in localStorage.
+  const wasKicked = await checkAuthEpoch();
+
+  profile = wasKicked ? null : await sGet('profile', false);
+
+  if(profile && profile.deviceId){
+    try{
+      supporter = await sGetStrict('supporter:' + profile.deviceId, true);
+      if(!supporter){
+        supporter = { name: profile.name, streak:0, totalDays:0, lastSupportAt:null, firstSupportAt:null };
+        await sSet('supporter:' + profile.deviceId, supporter, true);
+      }
+    }catch(e){
+      // Backend hiccup — NEVER overwrite a real record with zeros here.
+      setOnline(false);
+      supporter = supporter || { name: profile.name, streak:0, totalDays:0, lastSupportAt:null, firstSupportAt:null, _stale:true };
+    }
+  }
+
+  const completed = await consumeVerifiedRedirect();
+
+  route();
+  if(completed && profile && profile.name) go('/dashboard', false);
+
+  document.getElementById('boot').classList.add('hide');
+  setTimeout(()=>{ const b=document.getElementById('boot'); if(b) b.remove(); }, 400);
+
+  startPolling();
+}
+
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    if(document.hidden) return;              // background tabs don't burn requests
+    if(await checkAuthEpoch()) return;       // owner hit "sign everyone out" — this tab is done
+    Store.invalidate('supporters');
+    const p = location.pathname.replace(/\/$/,'') || '/';
+    if(p === '/dashboard')        renderDashboard(true);
+    else if(p === '/leaderboard') loadAndRenderLeaderboard();
+    else if(p === '/activity')    renderActivity();
+    else if(p === '/admin')       renderAdmin();
+    else if(p === '/')            renderLanding();
+  }, POLL_MS);
+}
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) manualRefresh(true); });
+
+async function manualRefresh(silent){
+  Store.invalidate();
+  const btn = document.getElementById('refreshBtn');
+  btn.style.opacity = '.4';
+  if(profile && profile.deviceId){
+    const fresh = await sGet('supporter:' + profile.deviceId, true);
+    if(fresh) supporter = fresh;
+  }
+  route();
+  btn.style.opacity = '';
+  if(!silent) toast('Refresh ho gaya');
+}
+
+function joinChannel(){ window.open(TELEGRAM_CHANNEL_LINK, '_blank', 'noopener'); }
+function startJourney(){
+  if(profile && profile.name) go('/dashboard');
+  else go('/connect');
+}
+
+/* =====================================================================
+   TELEGRAM CONNECT (supporter identity)
+   ===================================================================== */
+function mountSupporterWidget(){
+  const c = document.getElementById('supporterWidget');
+  c.innerHTML = '';
+  if(!hasBackend){ document.getElementById('connectNote').textContent = 'Backend configured nahi hai.'; return; }
+  const s = document.createElement('script');
+  s.async = true; s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', TELEGRAM_BOT_USERNAME);
+  s.setAttribute('data-size','large');
+  s.setAttribute('data-radius','10');
+  s.setAttribute('data-onauth','onSupporterTelegramAuth(user)');
+  s.setAttribute('data-request-access','write');
+  c.appendChild(s);
+}
+
+window.onSupporterTelegramAuth = async function(user){
+  document.getElementById('connectNote').textContent = 'Verify ho raha hai…';
+  try{
+    const r = await fetch(API_BASE_URL + '/api/telegram/verify-identity', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(user)
+    });
+    const data = await r.json();
+    if(!data.verified){ document.getElementById('connectNote').textContent = 'Verify nahi ho paya. Dobara try karo.'; return; }
+
+    const deviceId = 'tg_' + data.profile.id;   // stable across devices
+
+    let existing;
+    try{ existing = await sGetStrict('supporter:' + deviceId, true); }
+    catch(e){ document.getElementById('connectNote').textContent = 'Server abhi jawab nahi de raha — thodi der baad try karo.'; return; }
+
+    profile = { deviceId, name: data.profile.name, photoUrl: data.profile.photoUrl || '' };
+    await sSet('profile', profile, false);
+
+    supporter = existing || { streak:0, totalDays:0, lastSupportAt:null, firstSupportAt:null };
+    supporter.name     = data.profile.name;
+    supporter.username = data.profile.username || '';
+    supporter.photoUrl = data.profile.photoUrl || '';
+
+    if(!existing && pendingReferrer && pendingReferrer !== deviceId){
+      supporter.referredBy = pendingReferrer;
+      try{
+        const ref = await sGetStrict('supporter:' + pendingReferrer, true);
+        if(ref){ ref.referralCount = (ref.referralCount||0)+1; await sSet('supporter:' + pendingReferrer, ref, true); }
+      }catch(e){}
+    }
+
+    await sSet('supporter:' + deviceId, supporter, true);
+    Store.invalidate('supporters');
+    toast('Welcome, ' + data.profile.name);
+    go('/dashboard');
+  }catch(e){
+    document.getElementById('connectNote').textContent = 'Server se connect nahi ho paya.';
+  }
+};
+
+function supporterLogout(){
+  // Sirf is device ki identity hatti hai — streak/total days shared DB me
+  // Telegram ID ke saath safe rehte hai, dobara login par wapas mil jayenge.
+  localStorage.removeItem('personal:profile');
+  profile = null; supporter = null;
+  toast('Logout ho gaya');
+  go('/');
+}
+
+/* =====================================================================
+   TIERS & ROYAL RPG PROGRESSION SYSTEM
+   ===================================================================== */
+const TIERS = [
+  { level:1, name:'Bronze',      icon:'🥉', min:1,   next:3,    cls:'bronze',  color:'#cd7f32', title:'Recruit Sahyogi',       diwaliTitle:'Shubh Shuruat',           navratriTitle:'Pratham Sevak' },
+  { level:2, name:'Bronze Plus', icon:'🥉', min:3,   next:7,    cls:'bronze',  color:'#cd7f32', title:'Apprentice Sadasya',    diwaliTitle:'Deepak Sahyogi',          navratriTitle:'Bhakti Sadasya' },
+  { level:3, name:'Silver',      icon:'🥈', min:7,   next:15,   cls:'silver',  color:'#e6e9f0', title:'Streak Warrior',        diwaliTitle:'Roshni Yoddha',           navratriTitle:'Shakti Yoddha' },
+  { level:4, name:'Silver Plus', icon:'🥈', min:15,  next:30,   cls:'silver',  color:'#e6e9f0', title:'Elite Guardian',        diwaliTitle:'Prakash Rakshak',         navratriTitle:'Veer Rakshak' },
+  { level:5, name:'Gold',        icon:'🥇', min:30,  next:50,   cls:'gold',    color:'#ffd23f', title:'Channel Guardian',      diwaliTitle:'Kuber VIP Patron',        navratriTitle:'Divya Guardian' },
+  { level:6, name:'Gold Plus',   icon:'👑', min:50,  next:75,   cls:'gold',    color:'#ff9900', title:'Grandmaster VIP',       diwaliTitle:'Diwali Shrestha Patron',  navratriTitle:'Maha Shakti Yoddha' },
+  { level:7, name:'Diamond',     icon:'💎', min:75,  next:100,  cls:'diamond', color:'#7ef1ff', title:'Mythic Titan',          diwaliTitle:'Maha Lakshmi VIP',        navratriTitle:'Param Devotee' },
+  { level:8, name:'Diamond Plus',icon:'🌌', min:100, next:null, cls:'diamond', color:'#c084fc', title:'Immortal Legend',       diwaliTitle:'Amar Samrat (Diwali VIP)',navratriTitle:'Amar Shakti Samrat' }
+];
+
+function getTier(days){
+  let t = TIERS[0];
+  TIERS.forEach(x=>{ if((days||0) >= x.min) t = x; });
+  return t;
+}
+
+function getXP(days, streak){
+  return (days || 0) * 100 + ((streak || 0) > 7 ? (streak - 7) * 20 : 0);
+}
+
+function getRankInfo(days, streak, theme){
+  const t = getTier(days);
+  const xp = getXP(days, streak);
+  let title = t.title;
+  if(theme === 'diwali' && t.diwaliTitle) title = t.diwaliTitle;
+  else if(theme === 'navratri' && t.navratriTitle) title = t.navratriTitle;
+  return {
+    level: t.level,
+    tierName: t.name,
+    title: title,
+    icon: t.icon,
+    xp: xp,
+    cls: t.cls,
+    color: t.color
+  };
+}
+
+function currentSeasonTheme(){
+  return (Store._c.settings && Store._c.settings.data && Store._c.settings.data.seasonTheme) || 'normal';
+}
+
+/** Mirrors the backend's isPremiumSupporter() — 7+ day streak, still
+ *  currently active — so the badge here never claims something the
+ *  Forward Bot's own check (which supporters actually rely on) disagrees with. */
+function isPremium(s){
+  const streakPremium = !!(s && (s.streak||0) >= PREMIUM_STREAK_DAYS && s.lastSupportAt && (Date.now()-s.lastSupportAt) < cooldownFor(s));
+  // Set by the Forward Bot — a weekly-reward win or a manual /grantaccess —
+  // independent of streak, so a granted person keeps the badge even if
+  // their streak later lapses, and it self-clears the moment it passes.
+  const grantedPremium = !!(s && s.premiumGrantUntil && s.premiumGrantUntil > Date.now());
+  return streakPremium || grantedPremium;
+}
+
+/* =====================================================================
+   LANDING — real community numbers, not decoration
+   ===================================================================== */
+async function renderLanding(){
+  const el = document.getElementById('landingStats');
+  const list = await Store.supporters();
+  const c = communityStats(list);
+  el.innerHTML = [
+    [c.people, 'Supporters'],
+    [c.activeNow, 'Abhi active'],
+    [c.totalSupports, 'Total supports']
+  ].map(([v,k])=>`<div class="live-stat"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+}
+
+/* =====================================================================
+   DASHBOARD
+   ===================================================================== */
+function skel(n){ return Array.from({length:n}, ()=>'<div class="skel"></div>').join(''); }
+function emptyState(title, body){ return `<div class="empty"><b>${esc(title)}</b>${esc(body)}</div>`; }
+
+async function renderDashboard(silent){
+  if(!profile){ go('/'); return; }
+
+  // Always re-read this person's own record first — this is the number the
+  // whole screen hangs off, and a stale copy is what made streaks "vanish".
+  try{
+    const mine = await sGetStrict('supporter:' + profile.deviceId, true);
+    if(mine) supporter = mine;
+    document.getElementById('dashError').innerHTML = '';
+  }catch(e){
+    setOnline(false);
+    document.getElementById('dashError').innerHTML =
+      `<div class="err" style="margin-bottom:14px"><span>Server abhi jawab nahi de raha. Jo data dikh raha hai wo thoda purana ho sakta hai — kuch delete nahi hua.</span>
+       <button class="btn btn-secondary btn-sm" onclick="manualRefresh()">Dobara try karo</button></div>`;
+  }
+  if(!supporter) supporter = { name: profile.name, streak:0, totalDays:0 };
+
+  const days = supporter.totalDays || 0, streak = supporter.streak || 0;
+
+  document.getElementById('dashName').textContent = profile.name;
+  document.getElementById('dashAvatar').innerHTML = profile.photoUrl
+    ? `<img src="${esc(profile.photoUrl)}" alt="">`
+    : esc((profile.name||'?').charAt(0).toUpperCase());
+  countUp(document.getElementById('streakNum'), streak);
+  document.getElementById('streakCap').textContent = streak === 0
+    ? 'Pehla support karte hi streak shuru ho jayega.'
+    : streak === 1 ? 'Shuruaat ho gayi. Kal phir aana, streak 2 ho jayega.'
+    : 'Lagataar ' + streak + ' din. 12 ghante ke andar agla support karo to streak bani rahegi.';
+
+  // ---- premium (7-day streak OR a grant from the Forward Bot — weekly reward or manual) ----
+  const premium = isPremium(supporter);
+  const grantActive = !!(supporter.premiumGrantUntil && supporter.premiumGrantUntil > Date.now());
+  document.getElementById('premiumPill').style.display = premium ? '' : 'none';
+  const toGo = Math.max(0, PREMIUM_STREAK_DAYS - streak);
+  document.getElementById('premiumProgress').textContent = premium
+    ? (grantActive
+        ? '👑 Premium active — ' + Math.max(1, Math.ceil((supporter.premiumGrantUntil - Date.now())/86400000)) + ' din baaki.'
+        : '👑 Premium active — Forward Bot me premium content unlocked hai.')
+    : toGo === 0 ? '' : `🔒 Premium ke liye ${toGo} din aur lagataar support karo.`;
+
+  // ---- cooldown ----
+  if(cooldownTimer) clearInterval(cooldownTimer);
+  const tick = ()=>{
+    const left = supporter.lastSupportAt ? (supporter.lastSupportAt + cooldownFor(supporter) - Date.now()) : 0;
+    const on = left > 0;
+    const btn = document.getElementById('supportBtn');
+    const pill = document.getElementById('todayPill');
+    btn.disabled = on;
+    btn.textContent = on ? 'Agla support ' + countdown(left) + ' me' : 'Support complete karo';
+    pill.className = 'pill ' + (on ? 'green' : 'accent');
+    pill.innerHTML = `<span class="dot"></span><span>${on ? 'Ho gaya' : 'Ready'}</span>`;
+    document.getElementById('todayNote').textContent = on
+      ? 'Aaj ka support count ho chuka hai. Streak safe hai.'
+      : 'Lagbhag 3 minute lagenge. Streak +1 aur certificate update ho jayega.';
+    if(!on && cooldownTimer){ clearInterval(cooldownTimer); cooldownTimer = null; }
+  };
+  tick(); cooldownTimer = setInterval(tick, 1000);
+
+  // ---- certificate / VIP pass gate ----
+  const settings = await Store.settings();
+  const theme = settings.seasonTheme || 'normal';
+  const rankInfo = getRankInfo(days, supporter.streak, theme);
+
+  document.getElementById('certBtn').disabled = days === 0;
+  document.getElementById('certNote').textContent = days === 0
+    ? 'Ek support complete karne ke baad VIP Pass unlock ho jata hai.'
+    : 'LVL ' + rankInfo.level + ' • ' + rankInfo.title + ' • ' + rankInfo.xp.toLocaleString() + ' XP • ID CSC-' + certId();
+
+  // ---- level & tier progression ----
+  const tier = getTier(days);
+  document.getElementById('tierName').textContent = 'LVL ' + rankInfo.level + ' • ' + rankInfo.title;
+  document.getElementById('tierPill').textContent = rankInfo.icon + ' ' + rankInfo.tierName;
+  if(tier.next){
+    const pct = Math.max(0, Math.min(100, Math.round((days - tier.min) / (tier.next - tier.min) * 100)));
+    document.getElementById('tierBar').style.width = pct + '%';
+    const nextTier = TIERS[TIERS.indexOf(tier)+1];
+    document.getElementById('tierNote').textContent = (tier.next - days) + ' din aur, phir Level ' + (nextTier ? nextTier.level + ' (' + (nextTier.title || nextTier.name) + ')' : '') + ' unlock hoga.';
+  } else {
+    document.getElementById('tierBar').style.width = '100%';
+    document.getElementById('tierNote').textContent = 'Sabse upar wala level — Immortal Legend status unlocked!';
+  }
+
+  renderHeatmap(supporter.supportDates || []);
+
+  // ---- referral ----
+  document.getElementById('refInput').value = location.origin + '/?ref=' + encodeURIComponent(profile.deviceId);
+  const rc = supporter.referralCount || 0;
+  document.getElementById('refPill').textContent = rc === 1 ? '1 invite' : rc + ' invites';
+
+  // ---- community-derived cards ----
+  const list = await Store.supporters();
+  const c = communityStats(list);
+  const idx = list.findIndex(s => s._key === 'supporter:' + profile.deviceId);
+  const rank = idx >= 0 ? idx + 1 : null;
+  document.getElementById('dashRank').textContent = rank
+    ? 'Rank #' + rank + ' of ' + list.length
+    : list.length + ' supporters';
+
+  document.getElementById('dashStats').innerHTML = [
+    { k:'Power XP',    v: rankInfo.xp.toLocaleString(), f: '⚡ ' + rankInfo.title },
+    { k:'Total days',  v: days,                         f: days ? 'Pehla support ' + timeAgo(supporter.firstSupportAt) : 'Abhi shuru karo' },
+    { k:'Rank',        v: rank ? '#'+rank : '—',        f: list.length + ' supporters me se' },
+    { k:'Aaj active',  v: c.todaySupports,              f: 'aaj support kar chuke hai' }
+  ].map(s=>`<div class="stat"><div class="stat-label">${s.k}</div><div class="stat-value">${s.v}</div><div class="stat-foot">${esc(s.f)}</div></div>`).join('');
+
+  document.getElementById('dashTop').innerHTML = list.length
+    ? list.slice(0,5).map((s,i)=>rowHtml(s,i)).join('')
+    : emptyState('Abhi koi supporter nahi', 'Pehla naam tumhara ho sakta hai.');
+
+  document.getElementById('dashActivity').innerHTML = activityHtml(list, 5);
+
+  // responsive two-column split (kept in JS so it matches real content width)
+  document.getElementById('dashSplit').style.gridTemplateColumns = window.innerWidth >= 900 ? '1fr 1fr' : '1fr';
+  renderNav();
+}
+
+function rowHtml(s, i, opts){
+  opts = opts || {};
+  const me = profile && s._key === 'supporter:' + profile.deviceId;
+  const rc = i===0?'r1':i===1?'r2':i===2?'r3':'';
+  const av = s.photoUrl ? `<img src="${esc(s.photoUrl)}" alt="">` : esc((s.name||'?').charAt(0).toUpperCase());
+  const valLabel = opts.period === 'week' ? (s._periodScore||0) + ' is hafte'
+                  : opts.period === 'month' ? (s._periodScore||0) + ' is mahine'
+                  : (s.totalDays||0) + 'd';
+  return `<div class="row ${me?'me':''}">
+    <div class="rank ${rc}">${i+1}</div>
+    <div class="avatar" style="width:30px;height:30px;font-size:12px">${av}</div>
+    <div class="row-main">
+      <div class="row-title">${esc(s.name || 'Supporter')}${me?' · tum':''}${isPremium(s)?' 👑':''}</div>
+      <div class="row-sub">${(s.streak||0)} din streak · ${timeAgo(s.lastSupportAt)}</div>
+    </div>
+    <div class="row-val">${valLabel}</div>
+  </div>`;
+}
+
+function activityHtml(list, limit){
+  const recent = list.filter(s=>s.lastSupportAt).sort((a,b)=>b.lastSupportAt-a.lastSupportAt).slice(0, limit);
+  if(!recent.length) return emptyState('Abhi koi activity nahi', 'Pehla support hote hi yahan dikhega.');
+  return recent.map(s=>{
+    const av = s.photoUrl ? `<img src="${esc(s.photoUrl)}" alt="">` : esc((s.name||'?').charAt(0).toUpperCase());
+    return `<div class="row">
+      <div class="avatar" style="width:30px;height:30px;font-size:12px">${av}</div>
+      <div class="row-main">
+        <div class="row-title">${esc(s.name||'Supporter')} ne support kiya</div>
+        <div class="row-sub">${timeAgo(s.lastSupportAt)} · ${(s.streak||0)} din streak · total ${s.totalDays||0}</div>
+      </div>
+      <span class="pill ${(Date.now()-s.lastSupportAt) < cooldownFor(s) ? 'green':''}">${getTier(s.totalDays||0).icon}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderHeatmap(dates){
+  const grid = document.getElementById('heatmap');
+  const set = new Set(dates);
+  const today = dayKey(Date.now());
+  // align to week rows: start on the Sunday 13 weeks back
+  const start = new Date(); start.setHours(0,0,0,0);
+  start.setDate(start.getDate() - (90 + start.getDay()));
+  let html = '';
+  for(let i=0;i<=97;i++){
+    const d = new Date(start); d.setDate(start.getDate()+i);
+    if(d > new Date()) break;
+    const k = dayKey(d);
+    html += `<div class="cell ${set.has(k)?'on':''} ${k===today?'today':''}" title="${k}${set.has(k)?' — support kiya':''}"></div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function copyRef(){
+  const i = document.getElementById('refInput');
+  i.select();
+  (navigator.clipboard ? navigator.clipboard.writeText(i.value) : Promise.reject())
+    .then(()=>toast('Link copy ho gaya'))
+    .catch(()=>{ document.execCommand('copy'); toast('Link copy ho gaya'); });
+}
+
+/* =====================================================================
+   LEADERBOARD
+   ===================================================================== */
+let _lb = [];
+let lbPeriod = 'all'; // 'all' | 'week' | 'month'
+
+function setLbPeriod(p){
+  lbPeriod = p;
+  document.querySelectorAll('#lbPeriodTabs button').forEach(b=>{
+    b.className = 'btn btn-sm ' + (b.dataset.period === p ? 'btn-secondary' : 'btn-ghost');
+  });
+  document.getElementById('lbSub').textContent =
+    p === 'week'  ? 'Is hafte (Somvar se) kiye gaye supports ke hisaab se — har Somvar list khud fresh ho jaati hai.' :
+    p === 'month' ? 'Is mahine kiye gaye supports ke hisaab se — mahine ki 1 tareekh ko list khud fresh ho jaati hai.' :
+    'Total support days ke hisaab se. Barabar hone par jo pehle shuru kiya wo upar.';
+  renderLeaderboard();
+}
+
+async function loadAndRenderLeaderboard(){
+  const box = document.getElementById('lbList');
+  if(!_lb.length) box.innerHTML = skel(6);
+  _lb = await Store.supporters();
+  const c = communityStats(_lb);
+  document.getElementById('lbStats').innerHTML = [
+    ['Supporters', c.people], ['Aaj support', c.todaySupports],
+    ['Total supports', c.totalSupports], ['Sabse lambi streak', Math.max(0, ..._lb.map(s=>s.streak||0))]
+  ].map(([k,v])=>`<div class="stat"><div class="stat-label">${k}</div><div class="stat-value">${v}</div></div>`).join('');
+  renderLeaderboard();
+}
+function renderLeaderboard(){
+  const q = (document.getElementById('lbSearch').value || '').toLowerCase().trim();
+  let rows = q ? _lb.filter(s => (s.name||'').toLowerCase().includes(q)) : _lb.slice();
+
+  if(lbPeriod !== 'all'){
+    rows = rows.map(s => ({ ...s, _periodScore: periodScore(s, lbPeriod) })).filter(s => s._periodScore > 0);
+    rows.sort((a,b) => b._periodScore - a._periodScore);
+  }
+
+  const box = document.getElementById('lbList');
+  if(!rows.length){
+    box.innerHTML = q ? emptyState('Koi match nahi mila', 'Doosra naam try karo.')
+      : lbPeriod !== 'all' ? emptyState('Is period me abhi koi support nahi', 'Support karke is list me sabse pehle aao.')
+      : emptyState('Abhi koi supporter nahi', 'Pehla support karke list shuru karo.');
+    return;
+  }
+  box.innerHTML = rows.map((s,i)=> rowHtml(s, lbPeriod==='all' ? _lb.indexOf(s) : i, { period: lbPeriod })).join('');
+}
+
+/* =====================================================================
+   ACTIVITY + CHART
+   ===================================================================== */
+function setRange(d){
+  rangeDays = d; localStorage.setItem('_range', String(d));
+  ['r7','r30','ar7','ar30'].forEach(id=>{
+    const el = document.getElementById(id); if(!el) return;
+    const on = (id.endsWith('7') && d===7) || (id.endsWith('30') && d===30);
+    el.className = 'btn btn-sm ' + (on ? 'btn-secondary' : 'btn-ghost');
+  });
+  const p = location.pathname.replace(/\/$/,'');
+  if(p === '/activity') renderActivity(); else renderAdmin();
+}
+
+function buildSeries(list, days){
+  const counts = {}, labels = [];
+  for(let i=days-1;i>=0;i--){
+    const d = new Date(Date.now() - i*86400000);
+    counts[dayKey(d)] = 0;
+    labels.push(days <= 7 ? d.toLocaleDateString('en-IN',{weekday:'short'}) : String(d.getDate()));
+  }
+  list.forEach(s => (s.supportDates||[]).forEach(dt => { if(dt in counts) counts[dt]++; }));
+  return { values: Object.values(counts), labels };
+}
+function chartHtml(series){
+  const max = Math.max(1, ...series.values);
+  if(!series.values.some(v=>v>0)) return `<div class="empty" style="width:100%"><b>Abhi koi data nahi</b>Pehla support hote hi chart bharna shuru ho jayega.</div>`;
+  const last = series.values.length - 1;
+  return series.values.map((v,i)=>`
+    <div class="chart-col" title="${series.labels[i]}: ${v} support">
+      <div class="chart-bar ${i===last?'hi':''}" style="height:${Math.max(3, v/max*100)}%"></div>
+      <div class="chart-x">${series.labels[i]}</div>
+    </div>`).join('');
+}
+
+async function renderActivity(){
+  setRange._quiet = true;
+  const list = await Store.supporters();
+  document.getElementById('pubChart').innerHTML = chartHtml(buildSeries(list, rangeDays));
+  document.getElementById('activityList').innerHTML = activityHtml(list, 25);
+  ['r7','r30'].forEach(id=>{
+    const el = document.getElementById(id);
+    const on = (id==='r7' && rangeDays===7) || (id==='r30' && rangeDays===30);
+    el.className = 'btn btn-sm ' + (on ? 'btn-secondary' : 'btn-ghost');
+  });
+}
+
+/* =====================================================================
+   SUPPORT FLOW
+   ===================================================================== */
+function setStep(n){
+  document.querySelectorAll('#steps .step').forEach(el=>{
+    const i = parseInt(el.dataset.step,10);
+    el.classList.toggle('done', i < n);
+    el.classList.toggle('active', i === n);
+  });
+}
+function resetFlow(){
+  flowStep = 0;
+  if(flowTimer) clearInterval(flowTimer);
+  setStep(1);
+  const b = document.getElementById('flowBtn');
+  b.textContent = 'Support link kholo'; b.disabled = false; b.onclick = advanceFlow;
+  document.getElementById('flowHint').textContent = 'Har 12 ghante me ek baar support count hota hai.';
+
+  if(supporter && supporter.lastSupportAt && (supporter.lastSupportAt + cooldownFor(supporter) - Date.now()) > 0){
+    b.disabled = true;
+    b.textContent = 'Agla support ' + countdown(supporter.lastSupportAt + cooldownFor(supporter) - Date.now()) + ' me';
+    document.getElementById('flowHint').textContent = 'Aaj ka support ho chuka hai. Streak safe hai.';
+  }
+}
+
+async function advanceFlow(){
+  if(flowStep !== 0) return;
+  flowStep = 1; setStep(2);
+  const btn = document.getElementById('flowBtn');
+  btn.disabled = true;
+
+  if(hasBackend){
+    btn.textContent = 'Link khul raha hai…';
+    try{
+      const r = await fetch(API_BASE_URL + '/api/support/start', {
+        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+        body: JSON.stringify({ deviceId: profile.deviceId })
+      });
+      const data = await r.json();
+      if(!data.shortlink){
+        document.getElementById('flowHint').textContent = data.error || 'Support link generate nahi ho paya. Thodi der baad try karo.';
+        resetFlow(); return;
+      }
+      // Isi browser me yaad rakho ki HAMNE yeh session shuru kiya — jab wapas
+      // aayenge (chahe GPLinks se ya kisi resolved/bypassed link se), agar
+      // yeh match nahi karta, credit nahi milega. Isse ek resolved link ko
+      // kisi doosre insaan/device ko forward karke reuse nahi kiya ja sakta.
+      localStorage.setItem('pendingSupportSession', data.sessionId);
+      window.location.href = data.shortlink;
+    }catch(e){
+      toast('Server se connect nahi ho paya');
+      resetFlow();
+    }
+  } else {
+    window.open(SHORTLINK_URL, '_blank', 'noopener');
+    let s = SHORTLINK_MIN_SECONDS;
+    flowTimer = setInterval(()=>{
+      if(--s <= 0){
+        clearInterval(flowTimer); flowStep = 2; setStep(3);
+        btn.textContent = 'Verify karo'; btn.disabled = false; btn.onclick = completeSupport;
+      } else btn.textContent = 'Verify ho raha hai (' + s + 's)';
+    }, 1000);
+  }
+}
+
+/** Runs on every load — picks up ?verified=1&session=… from the backend. */
+async function consumeVerifiedRedirect(){
+  const q = new URLSearchParams(location.search);
+  if(q.get('verified') !== '1') return false;
+  const sessionId = q.get('session');
+  history.replaceState({}, '', location.pathname);
+  if(!hasBackend || !sessionId || !profile) return false;
+
+  // Isi browser ne yeh session shuru kiya tha ya nahi — check karo. Agar
+  // koi resolved/bypassed callback link doosre device ya doosre insaan ko
+  // forward kar diya jaaye, wahan yeh match nahi karega aur credit nahi
+  // milega. (Isi device pe khud bypass-bot use karke wapas yahi browser me
+  // khola gaya link — usse yeh farak nahi kar sakta, wahan 35-second
+  // confirm-wait hi asli friction hai.)
+  const pending = localStorage.getItem('pendingSupportSession');
+  localStorage.removeItem('pendingSupportSession');
+  if(pending !== sessionId){
+    toast('Yeh link is browser ka nahi hai — pehle yahi se Support shuru karo.');
+    return false;
+  }
+
+  try{
+    const r = await fetch(API_BASE_URL + '/api/support/consume', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId })
+    });
+    const d = await r.json();
+    if(d.ok){ await applySupportCompletion(); toast('Support complete — streak ' + supporter.streak); return true; }
+  }catch(e){}
+  return false;
+}
+
+async function completeSupport(){
+  setStep(4);
+  await applySupportCompletion();
+  toast('Support complete — streak ' + supporter.streak);
+  const b = document.getElementById('flowBtn');
+  b.textContent = 'Ho gaya'; b.disabled = true;
+  setTimeout(()=>{ resetFlow(); go('/dashboard'); }, 1100);
+}
+
+async function applySupportCompletion(){
+  const now = Date.now();
+  const inWindow = supporter.lastSupportAt && (now - supporter.lastSupportAt) <= cooldownFor(supporter)*2;
+  const prevTier = getTier(supporter.totalDays||0);
+
+  supporter.streak    = inWindow ? (supporter.streak||0)+1 : 1;
+  supporter.totalDays = (supporter.totalDays||0)+1;
+  supporter.firstSupportAt = supporter.firstSupportAt || now;
+  supporter.lastSupportAt  = now;
+
+  const k = dayKey(now);
+  supporter.supportDates = supporter.supportDates || [];
+  if(supporter.supportDates[supporter.supportDates.length-1] !== k){
+    supporter.supportDates.push(k);
+    if(supporter.supportDates.length > 180) supporter.supportDates = supporter.supportDates.slice(-180);
+  }
+
+  await sSet('supporter:' + profile.deviceId, supporter, true);
+  Store.invalidate('supporters');
+
+  confetti();
+  const newTier = getTier(supporter.totalDays);
+  if((newTier.level && newTier.level !== prevTier.level) || newTier.name !== prevTier.name) setTimeout(()=>tierModal(newTier), 700);
+
+  if(hasBackend){
+    try{
+      const settings = await Store.settings(true);
+      if(settings.notifyEnabled){
+        const theme = settings.seasonTheme || 'normal';
+        const rankInfo = getRankInfo(supporter.totalDays, supporter.streak, theme);
+
+        // The backend draws the Silver/Gold/Platinum certificate itself from the saved supporter record.
+        fetch(API_BASE_URL + '/api/notify/support', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            id: profile.deviceId,
+            name: supporter.name,
+            username: supporter.username||'',
+            totalDays: supporter.totalDays,
+            streak: supporter.streak,
+            level: rankInfo.level,
+            title: rankInfo.title,
+            tierName: rankInfo.tierName,
+            xp: rankInfo.xp,
+            theme: theme
+          })
+        }).catch(()=>{});
+      }
+    }catch(e){}
+  }
+}
+
+function tierModal(tier){
+  const m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML = `<div class="modal-card">
+    <div style="font-size:44px;line-height:1;margin-bottom:10px">${tier.icon}</div>
+    <div class="section-title" style="font-size:18px">LEVEL UP! ${tier.title || tier.name} Unlock</div>
+    <p class="panel-note" style="margin:6px 0 18px">Tumhara VIP Pass aur Royal Rank update ho gaya hai. Group me flex karo!</p>
+    <button class="btn btn-primary btn-block" onclick="this.closest('.modal').remove()">Shandar! 🎉</button>
+  </div>`;
+  m.addEventListener('click', e=>{ if(e.target === m) m.remove(); });
+  document.body.appendChild(m);
+}
+
+/* =====================================================================
+   CERTIFICATE OF SUPPORT — Silver / Gold / Platinum image drawn by the backend
+   (name, total days, streak, date and ID are filled in automatically)
+   ===================================================================== */
+function certImageUrl(bust){
+  if(!profile || !profile.deviceId) return '';
+  return API_BASE_URL + '/api/certificate/' + encodeURIComponent(String(profile.deviceId).replace(/^tg_/, '')) + '.png' + (bust ? ('?t=' + Date.now()) : '');
+}
+function openCertificate(){
+  if(!supporter || !supporter.totalDays){ toast('Pehle ek support complete karo'); return; }
+  go('/certificate');
+}
+function certId(){
+  const str = (supporter && supporter.name || '') + '|' + (supporter && supporter.totalDays || 0) + '|' + (supporter && supporter.firstSupportAt || 0);
+  let h = 0; for(let i=0;i<str.length;i++) h = (h*31 + str.charCodeAt(i)) >>> 0;
+  const x = h.toString(16).toUpperCase().padStart(8,'0');
+  return x.slice(0,4) + '-' + x.slice(4,8);
+}
+function loadCertificate(){
+  const testBtn = document.getElementById('btnAdminTestPreview');
+  if(testBtn) testBtn.style.display = isAdminSession() ? 'inline-flex' : 'none';
+  const img = document.getElementById('certImg');
+  if(!img) return;
+  const url = (supporter && supporter.totalDays) ? certImageUrl(true) : '';
+  if(!url){ img.removeAttribute('src'); return; }
+  img.style.opacity = '0.35';
+  img.onload = ()=>{ img.style.opacity = '1'; };
+  img.onerror = ()=>{ img.style.opacity = '1'; toast('Certificate load nahi ho paya — thodi der baad dobara try karo'); };
+  img.src = url;
+}
+async function fetchCertBlob(){
+  const url = certImageUrl(true);
+  if(!url) throw new Error('no profile');
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('http ' + r.status);
+  return await r.blob();
+}
+
+async function downloadCert(){
+  try{
+    const blob = await fetchCertBlob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'certificate-of-support-' + String((supporter && supporter.name) || 'supporter').replace(/\s+/g,'_') + '.png';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+    toast('Certificate download ho gaya');
+  }catch(e){
+    toast('Download nahi ho paya — dobara try karo');
+  }
+}
+
+async function shareToGroup(){
+  const caption = `🏅 Maine channel ko support karke apna Certificate of Support claim kiya! 🔥 Streak: ${supporter.streak} din • 📅 Total: ${supporter.totalDays} din #ChannelSupport`;
+  const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if(mobile && navigator.canShare){
+    try{
+      const blob = await fetchCertBlob();
+      const f = new File([blob], 'certificate-of-support.png', { type:'image/png' });
+      if(navigator.canShare({ files:[f] })){ await navigator.share({ files:[f], text: caption }); return; }
+    }catch(e){}
+  }
+  shareLink(caption);
+}
+function shareLink(caption){
+  window.open('https://t.me/share/url?url=' + encodeURIComponent(TELEGRAM_GROUP_LINK) + '&text=' + encodeURIComponent(caption), '_blank', 'noopener');
+}
+
+async function triggerAdminTestPreview(){
+  const btn = document.getElementById('btnAdminTestPreview');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Group me bheja ja raha hai…'; }
+  toast('🧪 Group me test certificate post ho raha hai…');
+  try{
+    const theme = currentSeasonTheme() || 'normal';
+    const rankInfo = getRankInfo(supporter ? supporter.totalDays : 50, supporter ? supporter.streak : 14, theme);
+    const r = await fetch(API_BASE_URL + '/api/notify/support', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        id: profile && profile.deviceId,
+        test: true,
+        name: (supporter && supporter.name) || (profile && profile.name) || 'Admin Test Supporter',
+        username: (supporter && supporter.username) || (profile && profile.username) || '',
+        totalDays: (supporter && supporter.totalDays) || 50,
+        streak: (supporter && supporter.streak) || 14,
+        level: rankInfo.level,
+        title: rankInfo.title,
+        tierName: rankInfo.tierName,
+        xp: rankInfo.xp,
+        theme: theme
+      })
+    });
+    const d = await r.json();
+    if(d.sent){
+      toast('✅ Group me test certificate bhej diya gaya hai!');
+    } else {
+      toast('⚠️ Bot error: ' + (d.error || 'Nahi bhej paya'));
+    }
+  }catch(e){
+    toast('Server error');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🧪 Test Group Preview'; }
+  }
+}
+
+/* =====================================================================
+   CONFETTI — one short burst, only on a real completion
+   ===================================================================== */
+function confetti(){
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const cv = document.getElementById('confetti');
+  cv.width = innerWidth; cv.height = innerHeight;
+  const ctx = cv.getContext('2d');
+  const colors = ['#ff3d8a','#8b5cf6','#ffc53d','#34d399'];
+  const ps = Array.from({length:70}, ()=>({
+    x: innerWidth/2, y: innerHeight/3,
+    vx:(Math.random()-.5)*13, vy:(Math.random()-1.5)*13,
+    s: 4+Math.random()*4, c: colors[Math.floor(Math.random()*colors.length)],
+    r: Math.random()*360, vr:(Math.random()-.5)*12, life: 90
+  }));
+  (function tick(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    let alive = false;
+    ps.forEach(p=>{
+      if(p.life<=0) return; alive = true;
+      p.vy += .33; p.x += p.vx; p.y += p.vy; p.r += p.vr; p.life--;
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.r*Math.PI/180);
+      ctx.globalAlpha = Math.min(1, p.life/28); ctx.fillStyle = p.c;
+      ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*.62); ctx.restore();
+    });
+    if(alive) requestAnimationFrame(tick); else ctx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+
+/* =====================================================================
+   ADMIN — sign in
+   ===================================================================== */
+function mountAdminWidget(){
+  if(isAdminSession()){ go('/admin'); return; }
+  const c = document.getElementById('adminWidget');
+  document.getElementById('adminNote').textContent = '';
+  if(!hasBackend || TELEGRAM_BOT_USERNAME === 'your_bot_username_here'){
+    document.getElementById('tgLoginCard').style.display = 'none';
+    document.getElementById('demoLoginCard').style.display = 'block';
+    return;
+  }
+  document.getElementById('tgLoginCard').style.display = 'block';
+  document.getElementById('demoLoginCard').style.display = 'none';
+  c.innerHTML = '';
+  const s = document.createElement('script');
+  s.async = true; s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', TELEGRAM_BOT_USERNAME);
+  s.setAttribute('data-size','large');
+  s.setAttribute('data-radius','10');
+  s.setAttribute('data-onauth','onTelegramAuth(user)');
+  s.setAttribute('data-request-access','write');
+  c.appendChild(s);
+}
+
+window.onTelegramAuth = async function(user){
+  const note = document.getElementById('adminNote');
+  note.textContent = 'Telegram se verify ho raha hai…';
+  try{
+    const r = await fetch(API_BASE_URL + '/api/admin/telegram-auth', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(user)
+    });
+    const data = await r.json();
+    if(!data.verified){ note.textContent = 'Verify nahi ho paya.'; return; }
+    await grantAdminAccess(data);
+  }catch(e){ note.textContent = 'Server se connect nahi ho paya.'; }
+};
+
+async function grantAdminAccess(data){
+  const note = document.getElementById('adminNote');
+  const rec = {
+    id: String(data.profile.id), name: data.profile.name,
+    username: (data.profile.username||'').toLowerCase(),
+    photoUrl: data.profile.photoUrl||'', lastLogin: Date.now()
+  };
+
+  let admins;
+  try{ admins = await sGetStrict('admins', true); }
+  catch(e){ note.textContent = 'Server abhi jawab nahi de raha — dobara try karo.'; return; }
+  if(!admins) admins = { ownerId:null, allowedUsernames:[] };
+
+  if(!admins.ownerId){
+    if(data.isOwner) admins.ownerId = rec.id;
+    else { note.textContent = 'Panel abhi set nahi hui — pehle channel owner ko sign in karna hoga.'; return; }
+  }
+
+  const isOwner = rec.id === admins.ownerId;
+  const listed  = rec.username && (admins.allowedUsernames||[]).includes(rec.username);
+  if(!isOwner && !listed){
+    note.textContent = 'Access nahi hai — owner ne tumhe admin list me add nahi kiya.';
+    return;
+  }
+
+  await sSet('adminprofile:' + rec.id, rec, true);
+  await sSet('admins', admins, true);
+  _knownAdmins = admins;
+
+  currentAdmin = { ...rec, isOwner };
+  localStorage.setItem('_currentAdminId', rec.id);
+  localStorage.setItem('_isOwner', isOwner ? '1' : '0');   // sticky — ek network hiccup se downgrade nahi hoga
+  toast('Welcome, ' + rec.name);
+  go('/admin');
+}
+
+function adminLogout(){
+  localStorage.removeItem('_currentAdminId');
+  localStorage.removeItem('_isOwner');
+  currentAdmin = null;
+  toast('Sign out ho gaya');
+  go(Home());
+}
+
+async function demoAdminLogin(){
+  const id = document.getElementById('adminIdInput').value.trim();
+  if(!id){ toast('Telegram ID daalo'); return; }
+  let admins = await sGet('admins', true) || { ownerId:null, allowedUsernames:[] };
+  if(!admins.ownerId) admins.ownerId = id;
+  const rec = { id, name:'Demo admin', username:'', photoUrl:'', lastLogin:Date.now() };
+  await sSet('adminprofile:' + id, rec, true);
+  await sSet('admins', admins, true);
+  currentAdmin = { ...rec, isOwner: admins.ownerId === id };
+  localStorage.setItem('_currentAdminId', id);
+  localStorage.setItem('_isOwner', currentAdmin.isOwner ? '1' : '0');
+  go('/admin');
+}
+
+/* =====================================================================
+   ADMIN — panel
+   ===================================================================== */
+let _knownAdmins = null;
+let _admSupporters = [];
+
+function setAdminTab(t){
+  adminTab = t;
+  document.querySelectorAll('#adminTabs button').forEach(b=>{
+    b.className = 'btn btn-sm ' + (b.dataset.tab === t ? 'btn-secondary' : 'btn-ghost');
+  });
+  ['overview','supporters','team','settings'].forEach(k=>{
+    document.getElementById('tab-'+k).style.display = (k===t) ? '' : 'none';
+  });
+  if(t === 'settings') renderServiceStatus();
+}
+
+async function renderAdmin(){
+  const myId = localStorage.getItem('_currentAdminId');
+
+  let admins, freshFromServer = false;
+  try{
+    admins = await sGetStrict('admins', true);
+    if(admins){ _knownAdmins = admins; freshFromServer = true; }
+  }catch(e){
+    setOnline(false);
+    admins = _knownAdmins;          // hiccup par purana known-good state rakho
+  }
+  if(!admins) admins = _knownAdmins || { ownerId:null, allowedUsernames:[] };
+
+  // Owner-ness: server ka jawab jab mile tab wahi sach, warna last known.
+  // Isse panel kabhi bhi galti se "normal user" jaisa nahi dikhega.
+  let iAmOwner;
+  if(admins.ownerId){ iAmOwner = !!myId && myId === admins.ownerId; localStorage.setItem('_isOwner', iAmOwner ? '1':'0'); }
+  else iAmOwner = localStorage.getItem('_isOwner') === '1';
+
+  document.getElementById('addAdminCard').style.display = iAmOwner ? 'block' : 'none';
+  document.getElementById('dangerZoneCard').style.display = iAmOwner ? 'block' : 'none';
+
+  const myProfile = myId ? await sGet('adminprofile:' + myId, true) : null;
+
+  // Revoked-admin kick: owner ne "Remove" dabaya ho toh us admin ka apna
+  // panel bhi turant band ho — sirf ek confirmed-fresh server read par,
+  // taaki ek network hiccup kisi ko galti se logout na kar de.
+  if(freshFromServer && myId && !iAmOwner){
+    const uname = myProfile && (myProfile.username||'').toLowerCase();
+    const stillListed = uname && (admins.allowedUsernames||[]).includes(uname);
+    if(!stillListed){
+      toast('Owner ne tumhara admin access hata diya hai');
+      adminLogout();
+      return;
+    }
+  }
+
+  document.getElementById('adminWho').innerHTML =
+    'Signed in as <b style="color:var(--text)">' + esc(myProfile ? myProfile.name : 'Admin') + '</b> ' +
+    '<span class="pill ' + (iAmOwner?'violet':'accent') + '">' + (iAmOwner ? 'Owner' : 'Admin') + '</span>';
+
+  setAdminTab(adminTab);
+
+  // ---- stats + chart ----
+  const list = await Store.supporters();
+  _admSupporters = list;
+  const c = communityStats(list);
+  document.getElementById('adminStats').innerHTML = [
+    ['Supporters', c.people, 'total registered'],
+    ['Aaj support', c.todaySupports, 'aaj complete kiya'],
+    ['Abhi active', c.activeNow, '12 ghante ke andar'],
+    ['Total supports', c.totalSupports, 'shuru se ab tak']
+  ].map(([k,v,f])=>`<div class="stat"><div class="stat-label">${k}</div><div class="stat-value">${v}</div><div class="stat-foot">${f}</div></div>`).join('');
+
+  document.getElementById('chartLabel').textContent = 'Daily supports · pichle ' + rangeDays + ' din';
+  document.getElementById('adminChart').innerHTML = chartHtml(buildSeries(list, rangeDays));
+  ['ar7','ar30'].forEach(id=>{
+    const el = document.getElementById(id);
+    const on = (id==='ar7' && rangeDays===7) || (id==='ar30' && rangeDays===30);
+    el.className = 'btn btn-sm ' + (on ? 'btn-secondary' : 'btn-ghost');
+  });
+
+  document.getElementById('adminTop').innerHTML = list.length
+    ? list.slice(0,8).map((s,i)=>rowHtml(s,i)).join('')
+    : emptyState('Abhi koi supporter nahi', 'Site live hote hi yahan data aana shuru ho jayega.');
+
+  const refs = list.filter(s=>s.referralCount>0).sort((a,b)=>b.referralCount-a.referralCount).slice(0,8);
+  document.getElementById('adminRefs').innerHTML = refs.length
+    ? refs.map((s,i)=>`<div class="row"><div class="rank ${i===0?'r1':i===1?'r2':i===2?'r3':''}">${i+1}</div>
+        <div class="row-main"><div class="row-title">${esc(s.name||'Supporter')}</div>
+        <div class="row-sub">${s.totalDays||0} din support</div></div>
+        <div class="row-val">${s.referralCount} invite</div></div>`).join('')
+    : emptyState('Abhi koi referral nahi', 'Supporters apna invite link share karenge to yahan dikhega.');
+
+  document.getElementById('adminSplit').style.gridTemplateColumns = window.innerWidth >= 900 ? '1fr 1fr' : '1fr';
+
+  // ---- team ----
+  const profileKeys = await sList('adminprofile:', true);
+  const profs = await Promise.all(profileKeys.map(k => sGet(k, true)));
+  const byUsername = {};
+  let ownerProfile = null;
+  profs.forEach(p=>{
+    if(!p) return;
+    if(p.username) byUsername[p.username.toLowerCase()] = p;
+    if(p.id === admins.ownerId) ownerProfile = p;
+  });
+
+  let html = '';
+  if(ownerProfile){
+    html += teamRow(ownerProfile.name, ownerProfile.photoUrl, 'Owner', 'violet',
+                    'Sign in ' + timeAgo(ownerProfile.lastLogin), '');
+  }
+  const ownerUname = ownerProfile && (ownerProfile.username||'').toLowerCase();
+  (admins.allowedUsernames||[]).forEach(u=>{
+    if(ownerUname && u === ownerUname) return;
+    const p = byUsername[u];
+    const rm = iAmOwner ? `<button class="btn btn-ghost btn-sm" onclick="removeAdmin('${esc(u)}')">Remove</button>` : '';
+    if(p) html += teamRow(p.name, p.photoUrl, 'Admin', 'accent', 'Sign in ' + timeAgo(p.lastLogin), rm);
+    else   html += teamRow('@'+u, '', 'Admin', 'accent', 'Abhi tak sign in nahi kiya', rm);
+  });
+  document.getElementById('adminsList').innerHTML = html || emptyState('Koi admin nahi', 'Owner yahan se admin add kar sakta hai.');
+
+  // ---- settings ----
+  const settings = await Store.settings();
+  document.getElementById('notifyToggle').checked = !!settings.notifyEnabled;
+  if(document.getElementById('seasonThemeSelect')){
+    document.getElementById('seasonThemeSelect').value = settings.seasonTheme || 'normal';
+  }
+  if(document.getElementById('activeSeasonPill')){
+    const names = { normal: '👑 Normal VIP', diwali: '🪔 Diwali Special', navratri: '🚩 Navratri Special' };
+    document.getElementById('activeSeasonPill').textContent = names[settings.seasonTheme || 'normal'] || 'Normal VIP';
+  }
+
+  renderSupportersTable();
+  renderAudit();
+  renderNav();
+}
+
+function teamRow(name, photo, role, tone, sub, extra){
+  const av = photo ? `<img src="${esc(photo)}" alt="">` : esc((name||'?').replace('@','').charAt(0).toUpperCase());
+  return `<div class="row">
+    <div class="avatar" style="width:34px;height:34px;font-size:13px">${av}</div>
+    <div class="row-main"><div class="row-title">${esc(name)}</div><div class="row-sub">${esc(sub)}</div></div>
+    <span class="pill ${tone}">${role}</span>${extra}
+  </div>`;
+}
+
+function renderSupportersTable(){
+  const q = (document.getElementById('admSearch').value || '').toLowerCase().trim();
+  const rows = q
+    ? _admSupporters.filter(s => (s.name||'').toLowerCase().includes(q) || (s.username||'').toLowerCase().includes(q))
+    : _admSupporters;
+  const body = document.getElementById('admTable');
+  if(!rows.length){
+    body.innerHTML = `<tr><td colspan="6"><div class="empty"><b>${q?'Koi match nahi mila':'Abhi koi supporter nahi'}</b>${q?'Doosra naam try karo.':'Pehla support hote hi list bharegi.'}</div></td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map(s=>{
+    const active = s.lastSupportAt && (Date.now()-s.lastSupportAt) < cooldownFor(s);
+    const premium = isPremium(s);
+    return `<tr>
+      <td>${esc(s.name||'—')}${s.username?'<div class="row-sub">@'+esc(s.username)+'</div>':''}</td>
+      <td>${s.streak||0}</td>
+      <td>${s.totalDays||0}</td>
+      <td>${timeAgo(s.lastSupportAt)}</td>
+      <td><span class="pill ${active?'green':''}">${active?'Active':'Idle'}</span></td>
+      <td>${premium?'<span class="pill gold">👑 Premium</span>':'<span class="row-sub">'+Math.max(0,PREMIUM_STREAK_DAYS-(s.streak||0))+'d to go</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function addAdminByUsername(){
+  const inp = document.getElementById('newAdminUsername');
+  const u = inp.value.trim().toLowerCase().replace(/^@/,'');
+  if(!u){ toast('Username daalo'); return; }
+  if(!/^[a-z0-9_]{5,32}$/.test(u)){ toast('Telegram username ka format galat hai'); return; }
+
+  let admins;
+  try{ admins = await sGetStrict('admins', true); }
+  catch(e){ toast('Server abhi jawab nahi de raha — dobara try karo'); return; }
+  if(!admins){ toast('Pehle owner ko sign in karna hoga'); return; }
+  admins.allowedUsernames = admins.allowedUsernames || [];
+
+  const ownerProfile = admins.ownerId ? await sGet('adminprofile:' + admins.ownerId, true) : null;
+  if(ownerProfile && (ownerProfile.username||'').toLowerCase() === u){ toast('Yeh already owner hai'); return; }
+  if(admins.allowedUsernames.includes(u)){ toast('Pehle se admin hai'); return; }
+
+  admins.allowedUsernames.push(u);
+  if(!await sSet('admins', admins, true)){ toast('Save nahi hua — dobara try karo'); return; }
+  _knownAdmins = admins;
+  inp.value = '';
+  toast('@' + u + ' add ho gaya');
+  logAdmin('ne @' + u + ' ko admin banaya');
+  renderAdmin();
+}
+
+async function removeAdmin(u){
+  let admins;
+  try{ admins = await sGetStrict('admins', true); }
+  catch(e){ toast('Server abhi jawab nahi de raha — dobara try karo'); return; }
+  if(!admins || !admins.allowedUsernames) return;
+  admins.allowedUsernames = admins.allowedUsernames.filter(x => x !== u);
+  await sSet('admins', admins, true);
+  _knownAdmins = admins;
+  toast('Admin hata diya');
+  logAdmin('ne @' + u + ' ko admin se hataya');
+  renderAdmin();
+}
+
+async function toggleNotify(){
+  const on = document.getElementById('notifyToggle').checked;
+  const s = await sGet('settings', true) || {};
+  s.notifyEnabled = on;
+  await sSet('settings', s, true);
+  Store.invalidate('settings');
+  toast(on ? 'Group notifications on' : 'Group notifications off');
+  logAdmin('ne group notifications ' + (on ? 'on' : 'off') + ' kiye');
+}
+
+async function changeSeasonTheme(){
+  const sel = document.getElementById('seasonThemeSelect');
+  if(!sel) return;
+  const theme = sel.value;
+  const s = await sGet('settings', true) || {};
+  s.seasonTheme = theme;
+  await sSet('settings', s, true);
+  Store.invalidate('settings');
+  const names = { normal: '👑 Normal VIP', diwali: '🪔 Diwali Special', navratri: '🚩 Navratri Special' };
+  if(document.getElementById('activeSeasonPill')){
+    document.getElementById('activeSeasonPill').textContent = names[theme] || 'Normal VIP';
+  }
+  toast('Season theme set ho gaya: ' + (names[theme] || theme));
+  logAdmin('ne season theme badal kar ' + theme + ' kiya');
+}
+
+/* =====================================================================
+   DANGER ZONE — owner-only, server-verified (backend re-checks the
+   telegramId against admins.ownerId itself; the UI gate here is just to
+   avoid showing the buttons to people who can't use them).
+   ===================================================================== */
+function openConfirm(title, body, onConfirm){
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmBody').textContent = body;
+  const btn = document.getElementById('confirmBtn');
+  btn.onclick = async ()=>{
+    btn.disabled = true; btn.textContent = 'Ho raha hai…';
+    try{ await onConfirm(); } finally { btn.disabled = false; btn.textContent = 'Haan, karo'; closeConfirm(); }
+  };
+  document.getElementById('confirmModal').style.display = 'grid';
+}
+function closeConfirm(){ document.getElementById('confirmModal').style.display = 'none'; }
+document.addEventListener('keydown', e=>{ if(e.key === 'Escape') closeConfirm(); });
+
+async function resetAllSupporters(){
+  openConfirm(
+    'Sabka support reset karo?',
+    'Verified Telegram supporters ka streak/total days zero ho jayega. Purane naam-wale (bina-Telegram) entries hamesha ke liye delete ho jayenge. Yeh turant hoga aur wapas nahi ho sakta.',
+    async ()=>{
+      const myId = localStorage.getItem('_currentAdminId');
+      try{
+        const r = await fetch(API_BASE_URL + '/api/admin/reset-all-supporters', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ telegramId: myId })
+        });
+        const d = await r.json();
+        if(!r.ok || !d.ok){ toast(d.error || 'Reset nahi ho paya'); return; }
+        Store.invalidate();
+        toast(d.reset + ' reset · ' + d.purged + ' purane entries hataye');
+        logAdmin('ne sabka support reset kiya (' + d.reset + ' reset, ' + d.purged + ' purane entries hataye)');
+        renderAdmin();
+      }catch(e){ toast('Server se connect nahi ho paya'); }
+    }
+  );
+}
+
+async function forceLogoutAll(){
+  openConfirm(
+    'Sabko sign out karo?',
+    'Har khula tab agli load par wapas welcome screen par chala jayega — supporters ko dobara Telegram se connect karna hoga.',
+    async ()=>{
+      const myId = localStorage.getItem('_currentAdminId');
+      try{
+        const r = await fetch(API_BASE_URL + '/api/admin/force-logout-all', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ telegramId: myId })
+        });
+        const d = await r.json();
+        if(!r.ok || !d.ok){ toast(d.error || 'Nahi ho paya'); return; }
+        localStorage.setItem('_authEpoch', String(d.epoch)); // apna tab is se safe rahega
+        toast('Sabko sign out kar diya gaya hai');
+        logAdmin('ne sabko sign out karaya');
+      }catch(e){ toast('Server se connect nahi ho paya'); }
+    }
+  );
+}
+
+/** Compares the shared auth_epoch counter to what this tab last saw. A
+ *  mismatch means the owner hit "Sign out everyone" since our last visit —
+ *  clear all local identity and send this tab back to the welcome screen.
+ *  Returns true if it just logged this tab out. */
+async function checkAuthEpoch(){
+  try{
+    const remote = await sGet('auth_epoch', true);
+    if(remote === null || remote === undefined) return false; // never bumped yet
+    const local = localStorage.getItem('_authEpoch');
+    localStorage.setItem('_authEpoch', String(remote));
+    if(local && String(local) !== String(remote)){
+      localStorage.removeItem('personal:profile');
+      localStorage.removeItem('_currentAdminId');
+      localStorage.removeItem('_isOwner');
+      profile = null; supporter = null; currentAdmin = null;
+      toast('Aapko sign out kar diya gaya hai — dobara connect karo');
+      go('/');
+      return true;
+    }
+  }catch(e){ /* offline — don't log anyone out on a network hiccup */ }
+  return false;
+}
+
+async function logAdmin(action){
+  try{
+    const raw = await sGet('admin_audit_log', true);
+    const log = Array.isArray(raw) ? raw : [];
+    const myId = localStorage.getItem('_currentAdminId');
+    const p = myId ? await sGet('adminprofile:' + myId, true) : null;
+    log.unshift({ action, by: p ? p.name : 'Admin', at: Date.now() });
+    await sSet('admin_audit_log', log.slice(0,40), true);
+  }catch(e){}
+}
+async function renderAudit(){
+  const el = document.getElementById('auditList');
+  const log = await sGet('admin_audit_log', true);
+  if(!Array.isArray(log) || !log.length){
+    el.innerHTML = emptyState('Abhi koi activity nahi', 'Admin ke har change ka record yahan aayega.');
+    return;
+  }
+  el.innerHTML = log.map(e=>`<div class="row">
+    <div class="row-main"><div class="row-title" style="font-weight:500">${esc(e.by)} ${esc(e.action)}</div></div>
+    <div class="row-sub">${timeAgo(e.at)}</div>
+  </div>`).join('');
+}
+
+async function renderServiceStatus(){
+  const el = document.getElementById('svcStatus');
+  el.innerHTML = skel(3);
+  const checks = [];
+
+  const t0 = performance.now();
+  try{
+    const r = await fetch(API_BASE_URL + '/api/health', { cache:'no-store' });
+    const h = await r.json();
+    const ms = Math.round(performance.now()-t0);
+    checks.push(['Backend (Render)', r.ok, ms + ' ms · ' + Math.round((h.uptimeSeconds||0)/60) + ' min se chal raha hai']);
+    checks.push(['Database (Upstash)', h.redis === 'ok',
+      h.redis === 'ok' ? 'connected'
+      : h.redis === 'not-configured' ? 'UPSTASH env variables set nahi hai'
+      : 'connect nahi ho paya']);
+  }catch(e){
+    // /api/health sirf naye backend me hai — purane par fallback check.
+    checks.push(['Backend (Render)', false, 'reachable nahi ya purana version deploy hai']);
+    try{ await apiPost('/api/storage/get', { key:'settings' }); checks.push(['Database (Upstash)', true, 'read ok']); }
+    catch(e2){ checks.push(['Database (Upstash)', false, 'read fail — env keys check karo']); }
+  }
+
+  const s = await Store.settings(true);
+  checks.push(['Group notifications', !!s.notifyEnabled, s.notifyEnabled ? 'on' : 'off']);
+
+  el.innerHTML = checks.map(([k, ok, note])=>`<div class="row">
+    <span class="pill ${ok?'green':'amber'}"><span class="dot"></span>${ok?'OK':'Check'}</span>
+    <div class="row-main"><div class="row-title">${k}</div><div class="row-sub">${esc(note)}</div></div>
+  </div>`).join('');
+}
+
+async function exportCSV(){
+  try{
+    const list = await Store.supporters();
+    const rows = [['Name','Username','Streak','TotalDays','Premium','Referrals','FirstSupport','LastSupport']];
+    list.forEach(v=>rows.push([
+      v.name||'', v.username||'', v.streak||0, v.totalDays||0, isPremium(v) ? 'Yes' : 'No', v.referralCount||0,
+      v.firstSupportAt ? new Date(v.firstSupportAt).toISOString() : '',
+      v.lastSupportAt  ? new Date(v.lastSupportAt).toISOString()  : ''
+    ]));
+    const csv = rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type:'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'supporters.csv'; a.click();
+    URL.revokeObjectURL(url);
+    toast('CSV download ho gaya');
+  }catch(e){ toast('Export nahi ho paya'); }
+}
+
+/* =====================================================================
+   GO
+   ===================================================================== */
+let _rz;
+addEventListener('resize', ()=>{
+  clearTimeout(_rz);
+  _rz = setTimeout(()=>{
+    if(window.innerWidth >= 1000) closeSidebar();
+    const two = window.innerWidth >= 900 ? '1fr 1fr' : '1fr';
+    const a = document.getElementById('dashSplit'), b = document.getElementById('adminSplit');
+    if(a) a.style.gridTemplateColumns = two;
+    if(b) b.style.gridTemplateColumns = two;
+  }, 150);
+});
+
+init();
+</script>
+</body>
+</html>

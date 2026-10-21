@@ -4,9 +4,10 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
+const { renderCertificate, tierForDays } = require('./certificate');
 
 const app = express();
-app.use(express.json({ limit: '25mb' })); // 25mb so animated video clips & logos fit safely
+app.use(express.json({ limit: '5mb' })); // logos / branding images only (animated card clips were removed)
 
 // ---------------------------------------------------------------------------
 // SECURITY HEADERS — basic hardening without needing extra dependencies.
@@ -83,7 +84,7 @@ async function redisCommand(cmd) {
 
 // Only known key patterns are writable/readable — stops random/abusive keys
 // and keeps the value size sane (branding logo can be a few hundred KB).
-const ALLOWED_KEY_PATTERN = /^(profile|admins|settings|branding|admin_audit_log|latest_card_anim_[\w-]+|card_anim:[\w-]+|supporter:[\w-]+|adminprofile:[\w-]+|cbfile:\d+|cbfile_seq|cbpost:\d+|cbpost_seq|cb:users|cb:admins|cbuser:[\w-]+|cb:log_total|cb:log_matched|session:[\w-]+|admin_pass:tg_[\w-]+)$/;
+const ALLOWED_KEY_PATTERN = /^(profile|admins|settings|branding|admin_audit_log|supporter:[\w-]+|adminprofile:[\w-]+|cbfile:\d+|cbfile_seq|cbpost:\d+|cbpost_seq|cb:users|cb:admins|cbuser:[\w-]+|cb:log_total|cb:log_matched|session:[\w-]+|admin_pass:tg_[\w-]+)$/;
 function isValidStorageKey(key) {
   return typeof key === 'string' && key.length <= 120 && ALLOWED_KEY_PATTERN.test(key);
 }
@@ -1465,26 +1466,6 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
-    // ---- CASE 0.9: Admin uploads an animated GIF / MP4 directly to the bot in DM ----
-    if (msg.chat.type === 'private' && (msg.animation || msg.video || msg.document)) {
-      const isAdmin = await checkIsAdmin(msg.from.id);
-      if (isAdmin) {
-        const anim = msg.animation || msg.video || (msg.document && msg.document.mime_type && msg.document.mime_type.includes('video') ? msg.document : null);
-        if (anim) {
-          let theme = 'navratri';
-          try {
-            const raw = await redisCommand(['GET', 'settings']);
-            if (raw) theme = JSON.parse(raw).seasonTheme || 'navratri';
-          } catch (e) {}
-
-          await redisCommand(['SET', 'latest_card_anim_' + theme, anim.file_id]);
-          await redisCommand(['SET', 'latest_card_anim_default', anim.file_id]);
-          await tgSendText(msg.chat.id, `✅ Badiya! Yeh animated GIF ab <b>${theme.toUpperCase()}</b> season card ke liye save ho gayi hai!\n\nAb group me /preview likhoge toh yahi GIF card aayega!`, {}, 'HTML');
-          return;
-        }
-      }
-    }
-
     // ---- CASE 1: Private DM to the bot (e.g. /start) ----
     if (msg.chat.type === 'private') {
       const userId = msg.from.id;
@@ -1543,8 +1524,8 @@ app.post('/api/telegram/webhook', async (req, res) => {
       }
     }
 
-    // ---- CASE 1.5: /testcard or /preview — admin-only preview of what support notification looks like in group ----
-    if (msg.text && /^\/(testcard|preview)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
+    // ---- CASE 1.5: /preview (or /testcard) [silver|gold|platinum] — admin-only: posts a sample certificate ----
+    if (msg.text && /^\/(testcard|preview|testcert)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
       const userId = msg.from ? msg.from.id : null;
       let allowed = false;
@@ -1557,151 +1538,26 @@ app.post('/api/telegram/webhook', async (req, res) => {
 
       if (allowed) {
         const targetChat = isPriv ? (process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || msg.chat.id) : msg.chat.id;
-        let theme = 'normal';
+        const arg = (msg.text.trim().split(/\s+/)[1] || '').toLowerCase();
+        let rec = null;
+        if (userId) {
+          try { const raw = await redisCommand(['GET', 'supporter:tg_' + userId]); rec = raw ? JSON.parse(raw) : null; } catch (e) {}
+        }
+        const fromName = [msg.from && msg.from.first_name, msg.from && msg.from.last_name].filter(Boolean).join(' ');
+        const name = (rec && rec.name) || fromName || 'Test Supporter';
+        const totalDays = (rec && rec.totalDays) || 49;
+        const streak = (rec && rec.streak) || 21;
+        const tier = ['silver', 'gold', 'platinum'].includes(arg) ? arg : tierForDays(totalDays);
         try {
-          const raw = await redisCommand(['GET', 'settings']);
-          if (raw) theme = JSON.parse(raw).seasonTheme || 'normal';
-        } catch (e) {}
-
-        const who = msg.from && msg.from.username ? '@' + msg.from.username : ((msg.from && msg.from.first_name) || 'Admin');
-        const userLvl = 6;
-        const s = 14;
-        const userXp = 6500;
-        const title = theme === 'diwali' ? 'Diwali Shrestha Patron' : (theme === 'navratri' ? 'Navratri Shakti Yoddha' : 'Grandmaster VIP (Maha Yoddha)');
-        const tierName = 'Grandmaster VIP';
-
-        let caption = '';
-        let buttonText = '🚀 Unlock VIP Pass';
-
-        if (theme === 'diwali') {
-          buttonText = '🪔 Claim Diwali Pass';
-          caption =
-            `🪔 <b>SHUBH DEEPAWALI!</b> 🪔\n` +
-            `👑 <b>DIWALI SPECIAL VIP PASS CLAIMED!</b>\n\n` +
-            `⚡ <b>${who}</b> ne Festival Support complete kiya!\n\n` +
-            `🏆 <b>Title:</b> ${title}\n` +
-            `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName}\n` +
-            `🔥 <b>Streak:</b> ${s} Days Unstoppable!\n` +
-            `✨ <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
-            `🪔 <b>Edition:</b> Deepawali Mahotsav 2026 [Verified]\n\n` +
-            `👇 <i>Tum bhi apna Diwali VIP Pass unlock karo:</i>\n\n` +
-            `<i>(🧪 Admin Test Preview Card)</i>`;
-        } else if (theme === 'navratri') {
-          buttonText = '🚩 Claim Shakti Pass';
-          caption =
-            `🚩 <b>JAI MATA DI!</b> 🚩\n` +
-            `⚡ <b>NAVRATRI SHAKTI PASS UNLOCKED!</b>\n\n` +
-            `👑 <b>${who}</b> ne Navratri Special Support claim kiya!\n\n` +
-            `🏆 <b>Title:</b> ${title}\n` +
-            `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName}\n` +
-            `🔥 <b>Streak:</b> ${s} Days Fire Streak!\n` +
-            `💎 <b>Supporter Aura:</b> ${userXp.toLocaleString()} XP\n` +
-            `🚩 <b>Edition:</b> Navratri Special Edition [Verified]\n\n` +
-            `👇 <i>Tum bhi apna Shakti Pass claim karo:</i>\n\n` +
-            `<i>(🧪 Admin Test Preview Card)</i>`;
-        } else {
-          caption =
-            `👑 <b>ROYAL VIP LEVEL UP!</b> 👑\n\n` +
-            `⚡ <b>${who}</b> reached <b>LEVEL ${userLvl} — ${tierName}</b>!\n\n` +
-            `🏆 <b>Rank Title:</b> ${title}\n` +
-            `🔥 <b>Streak:</b> ${s} Days Unbroken!\n` +
-            `💎 <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
-            `🎖️ <b>Status:</b> Verified Royal Member\n\n` +
-            `👇 <i>Tum bhi apna VIP Card unlock karo:</i>\n\n` +
-            `<i>(🧪 Admin Test Preview Card)</i>`;
-        }
-
-        const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
-        const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
-
-        let cachedAnimFileId = null;
-        try {
-          cachedAnimFileId = await redisCommand(['GET', 'latest_card_anim_v2_' + theme]);
-        } catch (e) {}
-
-        const localCardPath = path.join(__dirname, 'public', `card-${theme}.mp4`);
-        let sentOk = false;
-
-        // Stage 1: Try cached Telegram file_id (instant)
-        if (cachedAnimFileId) {
-          try {
-            const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: targetChat,
-                animation: cachedAnimFileId,
-                caption: caption,
-                parse_mode: 'HTML',
-                reply_markup: replyMarkup
-              })
-            });
-            const d = await r.json();
-            if (d.ok) sentOk = true;
-          } catch (e) {}
-        }
-
-        // Stage 2: If not sent or file_id invalid, upload local bundled MP4 clip directly
-        if (!sentOk && fs.existsSync(localCardPath)) {
-          try {
-            const form = new FormData();
-            form.append('chat_id', targetChat);
-            form.append('caption', caption);
-            form.append('parse_mode', 'HTML');
-            form.append('reply_markup', JSON.stringify(replyMarkup));
-            form.append('animation', fs.createReadStream(localCardPath), { filename: `card-${theme}.mp4`, contentType: 'video/mp4' });
-            const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
-              method: 'POST',
-              body: form
-            });
-            const d = await r.json();
-            if (d.ok && d.result) {
-              sentOk = true;
-              const fileId = d.result.animation?.file_id || d.result.document?.file_id || d.result.video?.file_id;
-              if (fileId) {
-                redisCommand(['SET', 'latest_card_anim_v2_' + theme, fileId]).catch(() => {});
-              }
-            }
-          } catch (e) {}
-        }
-
-        // Stage 3: Send via public URL
-        if (!sentOk) {
-          try {
-            const remoteUrl = `https://channel-support.pages.dev/assets/card-${theme}.mp4`;
-            const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: targetChat,
-                animation: remoteUrl,
-                caption: caption,
-                parse_mode: 'HTML',
-                reply_markup: replyMarkup
-              })
-            });
-            const d = await r.json();
-            if (d.ok && d.result) {
-              sentOk = true;
-              const fileId = d.result.animation?.file_id || d.result.document?.file_id || d.result.video?.file_id;
-              if (fileId) {
-                redisCommand(['SET', 'latest_card_anim_v2_' + theme, fileId]).catch(() => {});
-              }
-            }
-          } catch (e) {}
-        }
-
-        // Final fallback: plain text only if all video methods fail
-        if (!sentOk) {
-          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
-          }).catch(() => {});
-        }
-
-        if (isPriv && targetChat !== msg.chat.id) {
-          await tgSendText(msg.chat.id, `✅ Preview card group me bhej diya gaya hai! Check your discussion / notify chat.`);
+          const img = await renderCertificate({ name, totalDays, streak, tier, issuedAt: Date.now(), firstSupportAt: rec && rec.firstSupportAt });
+          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${tier.toUpperCase()} certificate`);
+          if (!out.ok) throw new Error(out.description || 'Telegram error');
+          if (isPriv && String(targetChat) !== String(msg.chat.id)) {
+            await tgSendText(msg.chat.id, `✅ Test certificate group me bhej diya gaya hai! Check your discussion / notify chat.`);
+          }
+        } catch (e) {
+          console.error('[cert] preview failed:', e.message);
+          await tgSendText(msg.chat.id, `❌ Certificate nahi ban paya: ${e.message}`);
         }
         return;
       }
@@ -2247,6 +2103,51 @@ app.post('/api/telegram/verify-identity', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// SUPPORT CERTIFICATE — Silver / Gold / Platinum image drawn by certificate.js
+// (replaces the old animated GIF/video card system).
+// ---------------------------------------------------------------------------
+async function sendCertificatePhoto(chatId, buffer, caption, replyMarkup) {
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('caption', caption);
+  form.append('parse_mode', 'HTML');
+  if (replyMarkup) form.append('reply_markup', JSON.stringify(replyMarkup));
+  form.append('photo', buffer, { filename: 'certificate.jpg', contentType: 'image/jpeg' });
+  const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+    method: 'POST', body: form, headers: form.getHeaders()
+  });
+  return await r.json();
+}
+
+// GET /api/certificate/<telegramId>.png — always the latest data (website download / share).
+const _certCache = new Map(); // cache key -> png buffer
+app.get('/api/certificate/:id.png', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').replace(/[^0-9]/g, '');
+    if (!id) return res.status(400).send('bad id');
+    const raw = await redisCommand(['GET', 'supporter:tg_' + id]);
+    if (!raw) return res.status(404).send('not found');
+    const rec = JSON.parse(raw);
+    if (!rec.totalDays) return res.status(404).send('no support yet');
+    const key = [id, rec.totalDays, rec.streak, rec.name, rec.lastSupportAt].join('|');
+    let buf = _certCache.get(key);
+    if (!buf) {
+      buf = await renderCertificate({
+        name: rec.name, totalDays: rec.totalDays, streak: rec.streak,
+        issuedAt: rec.lastSupportAt || Date.now(), firstSupportAt: rec.firstSupportAt, format: 'png'
+      });
+      if (_certCache.size > 100) _certCache.clear();
+      _certCache.set(key, buf);
+    }
+    res.set('Cache-Control', 'public, max-age=60');
+    res.type('png').send(buf);
+  } catch (e) {
+    console.error('[cert] endpoint failed:', e.message);
+    res.status(500).send('error');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 7) GROUP NOTIFICATION — bot posts a message whenever a supporter completes
 //    support (only called by the frontend when the owner has this toggled
 //    ON in the admin panel). Optionally point this at a different chat
@@ -2258,13 +2159,36 @@ app.post('/api/notify/support', async (req, res) => {
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
-  const { name, username, totalDays, streak, certImage, animVideo, level, title, tierName, xp, theme } = req.body || {};
-  const who = username ? '@' + username : (name || 'Someone');
-  const d = totalDays || 1;
-  const s = streak || 1;
+  const { id, test, name, username, totalDays, streak, level, title, tierName, xp, theme } = req.body || {};
+
+  // Real numbers come from the saved supporter record, not from whatever the browser claims.
+  const devId = (typeof id === 'string' && /^tg_\d+$/.test(id)) ? id : null;
+  let rec = null;
+  if (devId) {
+    try { const raw = await redisCommand(['GET', 'supporter:' + devId]); rec = raw ? JSON.parse(raw) : null; } catch (e) {}
+  }
+  const certName = (rec && rec.name) || name || 'Supporter';
+  const d = (rec && rec.totalDays) || totalDays || 1;
+  const s = (rec && rec.streak) || streak || 1;
+  const who = username ? '@' + username : (certName || 'Someone');
   const userLvl = level || (d >= 100 ? 8 : d >= 75 ? 7 : d >= 50 ? 6 : d >= 30 ? 5 : d >= 15 ? 4 : d >= 7 ? 3 : d >= 3 ? 2 : 1);
   const userXp = xp || (d * 100);
   const activeTheme = theme || 'normal';
+
+  // Duplicate guard: one post per supporter per total-days value (retried if Telegram failed).
+  let lockKey = null;
+  if (devId) {
+    try {
+      if (test) {
+        const ok = await redisCommand(['SET', 'cert_test:' + devId, '1', 'NX', 'EX', 15]);
+        if (!ok) return res.json({ sent: false, error: 'Thoda ruko — test 15 second me ek hi baar' });
+      } else {
+        lockKey = `cert_posted:${devId}:${d}`;
+        const ok = await redisCommand(['SET', lockKey, '1', 'NX', 'EX', 120]);
+        if (!ok) return res.json({ sent: false, error: 'Is support ka certificate pehle hi post ho chuka hai' });
+      }
+    } catch (e) { lockKey = null; /* Redis hiccup: better to post than to stay silent */ }
+  }
 
   let caption = '';
   let buttonText = '🚀 Unlock VIP Pass';
@@ -2308,101 +2232,34 @@ app.post('/api/notify/support', async (req, res) => {
   const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
 
   try {
-    let animBuffer = null;
-    let animExt = 'mp4';
-    if (animVideo && animVideo.includes(',')) {
-      try {
-        const header = animVideo.split(',')[0];
-        if (header.includes('webm')) animExt = 'webm';
-        else if (header.includes('gif')) animExt = 'gif';
-        animBuffer = Buffer.from(animVideo.split(',')[1], 'base64');
-      } catch (e) { /* ignore */ }
-    }
-
     let data = null;
-    let imageBuffer = null;
-    if (certImage && certImage.includes(',')) {
-      try { imageBuffer = Buffer.from(certImage.split(',')[1], 'base64'); } catch (e) { /* ignore, fall through */ }
-    }
-    if (!animBuffer) {
-      let cachedAnim = null;
-      try { cachedAnim = await redisCommand(['GET', 'latest_card_anim_v2_' + activeTheme]); } catch(e){}
-      const localCardPath = path.join(__dirname, 'public', `card-${activeTheme}.mp4`);
-      if (cachedAnim) {
-        try {
-          const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: targetChat, animation: cachedAnim, caption, parse_mode: 'HTML', reply_markup: replyMarkup })
-          });
-          data = await r.json();
-        } catch (e) {}
-      } else if (fs.existsSync(localCardPath)) {
-        try {
-          animBuffer = fs.readFileSync(localCardPath);
-          animExt = 'mp4';
-        } catch(e){}
-      }
-    }
-
-    if (!imageBuffer && !animBuffer && !data) {
-      try {
-        const brandingRaw = await redisCommand(['GET', 'branding']);
-        if (brandingRaw) {
-          const branding = JSON.parse(brandingRaw);
-          if (branding.logoData && branding.logoData.includes(',')) {
-            imageBuffer = Buffer.from(branding.logoData.split(',')[1], 'base64');
-          }
-        }
-      } catch (e) { /* no logo set yet — fall back to text-only below */ }
-    }
-
-    if (!data) {
-      if (animBuffer) {
-      // Send animated GIF / Video loop directly to Telegram
-      const form = new FormData();
-      form.append('chat_id', targetChat);
-      form.append('caption', caption);
-      form.append('parse_mode', 'HTML');
-      form.append('reply_markup', JSON.stringify(replyMarkup));
-      const mimeType = animExt === 'webm' ? 'video/webm' : (animExt === 'gif' ? 'image/gif' : 'video/mp4');
-      form.append('animation', animBuffer, { filename: `support_card.${animExt}`, contentType: mimeType });
-      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
-        method: 'POST',
-        body: form
+    try {
+      const img = await renderCertificate({
+        name: certName, totalDays: d, streak: s, tier: tierForDays(d),
+        issuedAt: (rec && rec.lastSupportAt) || Date.now(), firstSupportAt: rec && rec.firstSupportAt
       });
-      data = await r.json();
-      if (data.ok && data.result) {
-        const fileId = data.result.animation?.file_id || data.result.document?.file_id || data.result.video?.file_id;
-        if (fileId) {
-          redisCommand(['SET', 'latest_card_anim_v2_' + activeTheme, fileId]).catch(() => {});
-        }
-      }
-    } else if (imageBuffer) {
-      const form = new FormData();
-      form.append('chat_id', targetChat);
-      form.append('caption', caption);
-      form.append('parse_mode', 'HTML');
-      form.append('reply_markup', JSON.stringify(replyMarkup));
-      form.append('photo', imageBuffer, { filename: 'support.png', contentType: 'image/png' });
-      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-        method: 'POST',
-        body: form
-      });
-      data = await r.json();
-    } else {
+      data = await sendCertificatePhoto(targetChat, img, caption, replyMarkup);
+    } catch (e) {
+      console.error('[cert] image post failed, falling back to text:', e.message);
+    }
+    if (!data || !data.ok) {
+      // Never stay silent: if the image could not be made/sent, at least post the text card.
       const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
       });
-        data = await r.json();
-      }
+      data = await r.json();
     }
-    res.json({ sent: !!(data && data.ok), error: (data && data.ok) ? null : (data ? data.description : 'Failed to send') });
+    const okSent = !!(data && data.ok);
+    if (lockKey) {
+      if (okSent) redisCommand(['SET', lockKey, '1', 'EX', 172800]).catch(() => {});
+      else redisCommand(['DEL', lockKey]).catch(() => {});
+    }
+    res.json({ sent: okSent, error: okSent ? null : (data ? data.description : 'Failed to send') });
 
     // ---- Also unlock them in the Community's main topic (best-effort) ----
-    if (process.env.COMMUNITY_CHAT_ID) {
+    if (process.env.COMMUNITY_CHAT_ID && !test) {
       const mention = username ? '@' + username : (name || 'Someone');
       fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',

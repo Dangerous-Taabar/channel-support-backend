@@ -31,6 +31,8 @@ const rateLimitBuckets = new Map();
 setInterval(() => rateLimitBuckets.clear(), RATE_LIMIT_WINDOW_MS).unref();
 
 app.use((req, res, next) => {
+  // Ludo game traffic (live polling) has its own per-player limits inside ludo/ludo.js
+  if (req.path.startsWith('/api/ludo/')) return next();
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
   const count = (rateLimitBuckets.get(ip) || 0) + 1;
   rateLimitBuckets.set(ip, count);
@@ -45,6 +47,12 @@ app.use(cors({
   origin: allowedOrigins.includes('*') ? true : allowedOrigins,
   credentials: true
 }));
+
+// ---------------------------------------------------------------------------
+// LUDO — multiplayer Ludo for the ASTRA Telegram bot (Mini App page: /ludo on the frontend).
+// Needs LUDO_BOT_TOKEN + LUDO_BOT_SECRET (see .env.example). Mounted right after CORS on purpose.
+// ---------------------------------------------------------------------------
+app.use('/api/ludo', require('./ludo/ludo').router);
 
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev_secret_change_me';

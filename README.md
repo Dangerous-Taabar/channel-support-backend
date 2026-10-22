@@ -67,3 +67,19 @@ const API_BASE_URL = "https://your-app.onrender.com";
 ```
 
 at the top of the `<script>` block. When this is set, the page calls the real backend instead of the built-in simulated timer/whitelist.
+
+## Ludo (ASTRA bot Mini App)
+
+`ludo/` is a self-contained game router mounted at `/api/ludo` (see the 3 lines marked LUDO / ludo in `server.js`).
+It runs the multiplayer Ludo game for the ASTRA Telegram bot: rooms, real dice, rule checking, 30 s turn timers.
+The Mini App page itself is `ludo.html` on the Cloudflare frontend.
+
+Environment variables (Render → Environment):
+
+| Variable | Meaning |
+|---|---|
+| `LUDO_BOT_TOKEN` | token of the ASTRA bot (@AstraControlBot) — only used to verify Telegram login data. **Not** `TELEGRAM_BOT_TOKEN`. |
+| `LUDO_BOT_SECRET` | long random string, must be identical to `LUDO_BOT_SECRET` in the ASTRA bot's `.env` |
+| `LUDO_TURN_SECONDS` | optional, seconds per turn (default 30) |
+
+Health check: `GET /api/ludo/health` → `{"ok":true,"configured":true}`. Games live in memory: a Render restart ends running games (the bot refunds the entry fees).

@@ -51,6 +51,7 @@ function verifyInitData(raw, token = BOT_TOKEN, maxAgeSec = 86400) {
 // ---------------------------------------------------------------------------------------------
 // Rooms
 // ---------------------------------------------------------------------------------------------
+const BOT_NAMES = ["Astra Bot", "Ludo Bot", "Dice Bot"];
 function newRoom({ chatId, maxPlayers, bet }) {
     if (rooms.size >= MAX_ROOMS) cleanup(true);
     if (rooms.size >= MAX_ROOMS) throw httpError(503, "Too many games right now");
@@ -68,6 +69,7 @@ function httpError(status, message) {
 }
 function seatUser(room, user) {
     if (room.status !== "lobby") throw httpError(409, "The game already started");
+    if (room.vsBot && room.seats.some((s) => !s.bot)) throw httpError(409, "This game is against the bot");
     const have = room.seats.find((s) => s.id === user.id);
     if (have) return have;
     if (room.seats.length >= room.maxPlayers) throw httpError(409, "The room is full");
@@ -129,8 +131,27 @@ function cleanup(force = false) {
         else if (force && r.status === "finished") rooms.delete(id);
     }
 }
+/** Bot seats play by themselves: a short pause, roll, a short pause, then the engine's best move. */
+function botStep(room, now) {
+    const g = room.game;
+    const seat = room.seats[g.turn];
+    if (!seat || !seat.bot) { room.botAt = 0; return false; }
+    if (!room.botAt) { room.botAt = now + (g.phase === "roll" ? 1300 : 1100); return true; }
+    if (now < room.botAt) return true;
+    room.botAt = 0;
+    if (g.phase === "roll") { E.roll(g); afterAction(room); }
+    else if (g.phase === "move") { E.applyMove(g, E.bestToken(g)); afterAction(room); }
+    return true;
+}
 function tick(now = Date.now()) {
     for (const r of rooms.values()) {
+        if (r.status === "playing" && r.vsBot) {
+            try {
+                // nobody human left in the game (everyone forfeited): stop, the bots would play forever
+                if (r.seats.every((s, i) => s.bot || !r.game.players[i].active)) { finish(r, null, "abandoned"); continue; }
+                if (botStep(r, now)) continue;
+            } catch (e) { console.error("bot step error", e); }
+        }
         if (r.status === "playing" && r.deadline && now >= r.deadline) {
             try { handleTimeout(r); } catch (e) { console.error("tick error", e); }
         }
@@ -153,7 +174,7 @@ function publicRoom(room, userId) {
         winnerId: room.winnerId,
         reason: room.reason,
         you: you >= 0 ? you : null,
-        seats: room.seats.map((s, i) => ({ id: s.id, name: s.name, username: s.username, colour: g ? g.players[i].colour : null, active: g ? g.players[i].active : true })),
+        seats: room.seats.map((s, i) => ({ id: s.id, name: s.name, username: s.username, bot: !!s.bot, colour: g ? g.players[i].colour : null, active: g ? g.players[i].active : true })),
         game: g && {
             turn: g.turn,
             phase: g.phase,
@@ -224,9 +245,14 @@ router.get("/health", (req, res) => res.json({ ok: true, game: "astra-ludo", epo
 // ----- bot -> server
 router.post("/bot/rooms", wrap((req) => {
     botOnly(req);
-    const { chatId, maxPlayers, bet, creator } = req.body || {};
-    const room = newRoom({ chatId, maxPlayers, bet });
+    const { chatId, maxPlayers, bet, creator, bots } = req.body || {};
+    const nb = Math.min(3, Math.max(0, bots | 0)); // 1-3 = a game against the bot(s): free, starts straight away
+    const room = newRoom({ chatId, maxPlayers: nb ? nb + 1 : maxPlayers, bet: nb ? 0 : bet });
     if (creator?.id) seatUser(room, creator);
+    if (nb) {
+        room.vsBot = true;
+        for (let i = 0; i < nb; i++) room.seats.push({ id: -(i + 1), name: BOT_NAMES[i], username: null, bot: true });
+    }
     return { roomId: room.id, epoch: EPOCH };
 }));
 router.post("/bot/rooms/:id/seat", wrap((req) => {

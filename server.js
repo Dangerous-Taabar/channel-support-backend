@@ -83,7 +83,8 @@ async function redisCommand(cmd) {
   const r = await fetch(UPSTASH_URL, {
     method: 'POST',
     headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(cmd)
+    body: JSON.stringify(cmd),
+    signal: AbortSignal.timeout(8000) // never hang forever on the database
   });
   const data = await r.json();
   if (data.error) throw new Error(data.error);
@@ -269,8 +270,18 @@ app.post('/api/support/start', async (req, res) => {
       return res.status(500).json({ error: 'Shortlink service configured nahi hai. Owner ko /setshortlink use karne bolo.' });
     }
     const apiUrl = `${cfg.apiUrl}?api=${cfg.apiKey}&url=${encodeURIComponent(callbackUrl)}`;
-    const r = await fetch(apiUrl);
-    const data = await r.json();
+    // The shortlink provider is sometimes slow or briefly down: 12 s limit per try, one automatic retry.
+    let data;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const r = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
+        data = await r.json();
+        break;
+      } catch (e) {
+        console.error(`Shortlink API attempt ${attempt} failed:`, e.name, e.message);
+        if (attempt === 2) throw e;
+      }
+    }
     console.log('Shortlink API response:', JSON.stringify(data));
 
     const finalLink = data && (data.shortenedUrl || data.short_url);

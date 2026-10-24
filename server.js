@@ -1521,6 +1521,37 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
+    // ---- CASE 1.3: /setsupporttopic, /resetsupporttopic, /supporttopic — admin-only ----
+    // Run /setsupporttopic INSIDE the topic where support cards should be posted.
+    if (msg.text && /^\/(setsupporttopic|resetsupporttopic|supporttopic)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
+      const userId = msg.from ? msg.from.id : null;
+      let allowed = false;
+      if (msg.chat.type !== 'private' && msg.sender_chat && msg.sender_chat.id === msg.chat.id) allowed = true;
+      if (!allowed && userId) allowed = await checkIsAdmin(userId, msg.chat.id);
+      if (allowed) {
+        const which = msg.text.trim().split(/\s+/)[0].toLowerCase().replace(/@\S+$/, '');
+        const reply = (t) => tgSendText(msg.chat.id, t, {
+          parse_mode: 'HTML',
+          ...(msg.is_topic_message && msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {})
+        });
+        if (which === '/setsupporttopic') {
+          if (msg.chat.type === 'private' || !msg.is_topic_message || !msg.message_thread_id) {
+            await reply('⚠️ Yeh command community group ke <b>support topic ke andar</b> likho (General me nahi, DM me nahi).');
+            return;
+          }
+          await redisCommand(['SET', 'notify_target', JSON.stringify({ chatId: msg.chat.id, threadId: msg.message_thread_id })]);
+          await reply('✅ <b>Support topic set ho gaya!</b>\nAb saare support cards / certificates isi topic me aayenge.\nTest karne ke liye <code>/preview</code> likho.');
+        } else if (which === '/resetsupporttopic') {
+          await redisCommand(['DEL', 'notify_target']);
+          await reply('♻️ Support topic hata diya. Ab cards wapas .env wale chat me jayenge.');
+        } else {
+          const t = await getNotifyTarget();
+          await reply(`📍 <b>Support card target</b>\nChat: <code>${t.chatId || '-'}</code>\nTopic ID: <code>${t.threadId || '-'}</code>\nSource: ${t.source === 'bot' ? 'bot command' : '.env'}`);
+        }
+        return;
+      }
+    }
+
     // ---- CASE 1.4: /setseason <navratri|diwali|normal> — admin command to switch active festival season ----
     if (msg.text && /^\/setseason(@\S+)?(\s+|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
@@ -1566,7 +1597,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
       }
 
       if (allowed) {
-        const targetChat = isPriv ? (process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || msg.chat.id) : msg.chat.id;
+        const nt = isPriv ? await getNotifyTarget() : null;
+        const targetChat = isPriv ? (nt.chatId || msg.chat.id) : msg.chat.id;
+        // DM preview -> goes to the configured support topic; preview typed inside a topic -> stays in that topic
+        const targetThread = isPriv ? (nt.chatId ? nt.threadId : null) : (msg.is_topic_message ? msg.message_thread_id : null);
         const arg = (msg.text.trim().split(/\s+/)[1] || '').toLowerCase();
         let rec = null;
         if (userId) {
@@ -1579,10 +1613,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const tier = ['silver', 'gold', 'platinum'].includes(arg) ? arg : tierForDays(totalDays);
         try {
           const img = await renderCertificate({ name, totalDays, streak, tier, issuedAt: Date.now(), firstSupportAt: rec && rec.firstSupportAt });
-          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${tier.toUpperCase()} certificate`);
+          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${tier.toUpperCase()} certificate`, null, targetThread);
           if (!out.ok) throw new Error(out.description || 'Telegram error');
           if (isPriv && String(targetChat) !== String(msg.chat.id)) {
-            await tgSendText(msg.chat.id, `✅ Test certificate group me bhej diya gaya hai! Check your discussion / notify chat.`);
+            await tgSendText(msg.chat.id, `✅ Test certificate support topic me bhej diya gaya hai! Wahan check karo.`);
           }
         } catch (e) {
           console.error('[cert] preview failed:', e.message);
@@ -2135,9 +2169,26 @@ app.post('/api/telegram/verify-identity', (req, res) => {
 // SUPPORT CERTIFICATE — Silver / Gold / Platinum image drawn by certificate.js
 // (replaces the old animated GIF/video card system).
 // ---------------------------------------------------------------------------
-async function sendCertificatePhoto(chatId, buffer, caption, replyMarkup) {
+// Where support cards get posted. Priority:
+//   1) the topic saved by an admin running /setsupporttopic inside the topic (Redis 'notify_target')
+//   2) env: TELEGRAM_NOTIFY_CHAT_ID (or TELEGRAM_CHAT_ID) + optional TELEGRAM_NOTIFY_TOPIC_ID
+async function getNotifyTarget() {
+  try {
+    const raw = await redisCommand(['GET', 'notify_target']);
+    if (raw) {
+      const t = JSON.parse(raw);
+      if (t && t.chatId) return { chatId: t.chatId, threadId: t.threadId || null, source: 'bot' };
+    }
+  } catch (e) { /* fall back to env below */ }
+  const chatId = process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || null;
+  const threadId = process.env.TELEGRAM_NOTIFY_TOPIC_ID ? Number(process.env.TELEGRAM_NOTIFY_TOPIC_ID) : null;
+  return { chatId, threadId: threadId || null, source: 'env' };
+}
+
+async function sendCertificatePhoto(chatId, buffer, caption, replyMarkup, threadId) {
   const form = new FormData();
   form.append('chat_id', String(chatId));
+  if (threadId) form.append('message_thread_id', String(threadId));
   form.append('caption', caption);
   form.append('parse_mode', 'HTML');
   if (replyMarkup) form.append('reply_markup', JSON.stringify(replyMarkup));
@@ -2184,7 +2235,9 @@ app.get('/api/certificate/:id.png', async (req, res) => {
 //    falls back to TELEGRAM_CHAT_ID.
 // ---------------------------------------------------------------------------
 app.post('/api/notify/support', async (req, res) => {
-  const targetChat = process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+  const target = await getNotifyTarget();
+  const targetChat = target.chatId;
+  const targetThread = target.threadId;
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
@@ -2241,7 +2294,7 @@ app.post('/api/notify/support', async (req, res) => {
         name: certName, totalDays: d, streak: s, tier: tierForDays(d),
         issuedAt: (rec && rec.lastSupportAt) || Date.now(), firstSupportAt: rec && rec.firstSupportAt
       });
-      data = await sendCertificatePhoto(targetChat, img, caption, replyMarkup);
+      data = await sendCertificatePhoto(targetChat, img, caption, replyMarkup, targetThread);
     } catch (e) {
       console.error('[cert] image post failed, falling back to text:', e.message);
     }
@@ -2250,7 +2303,7 @@ app.post('/api/notify/support', async (req, res) => {
       const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
+        body: JSON.stringify({ chat_id: targetChat, ...(targetThread ? { message_thread_id: targetThread } : {}), text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
       });
       data = await r.json();
     }

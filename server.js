@@ -1709,6 +1709,11 @@ app.post('/api/telegram/webhook', async (req, res) => {
     // Requires the bot to have "Delete messages" admin permission there.
     const communityChatId = process.env.COMMUNITY_CHAT_ID;
     if (communityChatId && String(msg.chat.id) === String(communityChatId) && !msg.is_topic_message) {
+      // Anonymous admins (posting as the group itself), channel posts / auto-forwards and
+      // bots are never regular members — they must never get the "please support" nudge.
+      // (Anonymous admin arrives as from = GroupAnonymousBot + sender_chat = this group.)
+      if (!msg.from || msg.sender_chat || msg.from.is_bot ||
+          [1087968824, 136817688, 777000].includes(Number(msg.from.id))) return;
       const userId = msg.from.id;
       const tgDeleteMsg = (msgId) => fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

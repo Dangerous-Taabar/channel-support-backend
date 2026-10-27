@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const path = require('path');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const { renderCertificate, tierForDays } = require('./certificate');
@@ -32,6 +31,8 @@ const rateLimitBuckets = new Map();
 setInterval(() => rateLimitBuckets.clear(), RATE_LIMIT_WINDOW_MS).unref();
 
 app.use((req, res, next) => {
+  // Ludo game traffic (live polling) has its own per-player limits inside ludo/ludo.js
+  if (req.path.startsWith('/api/ludo/')) return next();
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
   const count = (rateLimitBuckets.get(ip) || 0) + 1;
   rateLimitBuckets.set(ip, count);
@@ -46,6 +47,12 @@ app.use(cors({
   origin: allowedOrigins.includes('*') ? true : allowedOrigins,
   credentials: true
 }));
+
+// ---------------------------------------------------------------------------
+// LUDO — multiplayer Ludo for the ASTRA Telegram bot (Mini App page: /ludo on the frontend).
+// Needs LUDO_BOT_TOKEN + LUDO_BOT_SECRET (see .env.example). Mounted right after CORS on purpose.
+// ---------------------------------------------------------------------------
+app.use('/api/ludo', require('./ludo/ludo').router);
 
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev_secret_change_me';
@@ -76,7 +83,8 @@ async function redisCommand(cmd) {
   const r = await fetch(UPSTASH_URL, {
     method: 'POST',
     headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(cmd)
+    body: JSON.stringify(cmd),
+    signal: AbortSignal.timeout(8000) // never hang forever on the database
   });
   const data = await r.json();
   if (data.error) throw new Error(data.error);
@@ -238,42 +246,57 @@ app.post('/api/support/start', async (req, res) => {
   const { deviceId } = req.body || {};
   if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
 
+  // Server-side 12-hour lock: the page disables the button too, but the browser alone is never trusted.
+  try {
+    const rawRec = await redisCommand(['GET', 'supporter:' + deviceId]);
+    const rec = rawRec ? JSON.parse(rawRec) : null;
+    if (rec && isCurrentlyActive(rec)) {
+      const left = rec.lastSupportAt + (rec.testCooldownMs || SUPPORT_WINDOW_MS) - Date.now();
+      return res.status(429).json({ error: `Aaj ka support ho chuka hai. Agla support ${formatRemaining(left)} baad.`, retryAfterMs: left });
+    }
+  } catch (e) { /* Redis hiccup: don't block a real supporter */ }
+
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = signToken(sessionId);
   await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false });
   setSessionCookie(res, sessionId);
 
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
-  const customGatewayUrl = `${PUBLIC_BASE_URL}/gateway?ret=${encodeURIComponent(callbackUrl)}`;
 
   try {
     const cfg = await getShortlinkConfig();
-    // Use custom TechStudyHub Google Ad Gateway if configured or if no external provider key
-    if (cfg.provider === 'custom' || (!cfg.apiKey && !cfg.apiUrl)) {
-      return res.json({ sessionId, shortlink: customGatewayUrl });
+    if (!cfg.apiKey || !cfg.apiUrl) {
+      console.error('Shortlink provider not configured (no env vars, no /setshortlink config).');
+      return res.status(500).json({ error: 'Shortlink service configured nahi hai. Owner ko /setshortlink use karne bolo.' });
     }
     const apiUrl = `${cfg.apiUrl}?api=${cfg.apiKey}&url=${encodeURIComponent(callbackUrl)}`;
-    const r = await fetch(apiUrl);
-    const data = await r.json();
+    // The shortlink provider is sometimes slow or briefly down: 12 s limit per try, one automatic retry.
+    let data;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const r = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
+        data = await r.json();
+        break;
+      } catch (e) {
+        console.error(`Shortlink API attempt ${attempt} failed:`, e.name, e.message);
+        if (attempt === 2) throw e;
+      }
+    }
     console.log('Shortlink API response:', JSON.stringify(data));
 
     const finalLink = data && (data.shortenedUrl || data.short_url);
     if (!finalLink) {
-      console.warn('External shortlink provider failed, falling back to Custom Ad Gateway');
-      return res.json({ sessionId, shortlink: customGatewayUrl });
+      // IMPORTANT: never silently fall back to the raw internal callback
+      // URL here — that would let anyone skip the shortlink/ads entirely
+      // (zero-second "support complete" for free). Fail loudly instead.
+      console.error('Shortlink provider did not return a shortened URL:', JSON.stringify(data));
+      return res.status(502).json({ error: 'Shortlink generate nahi ho paya. Provider key/URL check karo (Render logs me detail hai).' });
     }
     res.json({ sessionId, shortlink: finalLink });
   } catch (err) {
-    console.error('Shortlink API call failed, falling back to Custom Ad Gateway:', err.message);
-    return res.json({ sessionId, shortlink: customGatewayUrl });
+    console.error('Shortlink API call failed:', err.message);
+    return res.status(502).json({ error: 'Shortlink service se connect nahi ho paya. Thodi der baad try karo.' });
   }
-});
-
-// ---------------------------------------------------------------------------
-// GATEWAY — Shows the 5s "Click 1st link on Google" instruction card
-// ---------------------------------------------------------------------------
-app.get('/gateway', (req, res) => {
-  res.sendFile(path.join(__dirname, 'gateway.html'));
 });
 
 // ---------------------------------------------------------------------------
@@ -1498,6 +1521,37 @@ app.post('/api/telegram/webhook', async (req, res) => {
       return;
     }
 
+    // ---- CASE 1.3: /setsupporttopic, /resetsupporttopic, /supporttopic — admin-only ----
+    // Run /setsupporttopic INSIDE the topic where support cards should be posted.
+    if (msg.text && /^\/(setsupporttopic|resetsupporttopic|supporttopic)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
+      const userId = msg.from ? msg.from.id : null;
+      let allowed = false;
+      if (msg.chat.type !== 'private' && msg.sender_chat && msg.sender_chat.id === msg.chat.id) allowed = true;
+      if (!allowed && userId) allowed = await checkIsAdmin(userId, msg.chat.id);
+      if (allowed) {
+        const which = msg.text.trim().split(/\s+/)[0].toLowerCase().replace(/@\S+$/, '');
+        const reply = (t) => tgSendText(msg.chat.id, t, {
+          parse_mode: 'HTML',
+          ...(msg.is_topic_message && msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {})
+        });
+        if (which === '/setsupporttopic') {
+          if (msg.chat.type === 'private' || !msg.is_topic_message || !msg.message_thread_id) {
+            await reply('⚠️ Yeh command community group ke <b>support topic ke andar</b> likho (General me nahi, DM me nahi).');
+            return;
+          }
+          await redisCommand(['SET', 'notify_target', JSON.stringify({ chatId: msg.chat.id, threadId: msg.message_thread_id })]);
+          await reply('✅ <b>Support topic set ho gaya!</b>\nAb saare support cards / certificates isi topic me aayenge.\nTest karne ke liye <code>/preview</code> likho.');
+        } else if (which === '/resetsupporttopic') {
+          await redisCommand(['DEL', 'notify_target']);
+          await reply('♻️ Support topic hata diya. Ab cards wapas .env wale chat me jayenge.');
+        } else {
+          const t = await getNotifyTarget();
+          await reply(`📍 <b>Support card target</b>\nChat: <code>${t.chatId || '-'}</code>\nTopic ID: <code>${t.threadId || '-'}</code>\nSource: ${t.source === 'bot' ? 'bot command' : '.env'}`);
+        }
+        return;
+      }
+    }
+
     // ---- CASE 1.4: /setseason <navratri|diwali|normal> — admin command to switch active festival season ----
     if (msg.text && /^\/setseason(@\S+)?(\s+|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
@@ -1543,7 +1597,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
       }
 
       if (allowed) {
-        const targetChat = isPriv ? (process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || msg.chat.id) : msg.chat.id;
+        const nt = isPriv ? await getNotifyTarget() : null;
+        const targetChat = isPriv ? (nt.chatId || msg.chat.id) : msg.chat.id;
+        // DM preview -> goes to the configured support topic; preview typed inside a topic -> stays in that topic
+        const targetThread = isPriv ? (nt.chatId ? nt.threadId : null) : (msg.is_topic_message ? msg.message_thread_id : null);
         const arg = (msg.text.trim().split(/\s+/)[1] || '').toLowerCase();
         let rec = null;
         if (userId) {
@@ -1556,10 +1613,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const tier = ['silver', 'gold', 'platinum'].includes(arg) ? arg : tierForDays(totalDays);
         try {
           const img = await renderCertificate({ name, totalDays, streak, tier, issuedAt: Date.now(), firstSupportAt: rec && rec.firstSupportAt });
-          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${tier.toUpperCase()} certificate`);
+          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${tier.toUpperCase()} certificate`, null, targetThread);
           if (!out.ok) throw new Error(out.description || 'Telegram error');
           if (isPriv && String(targetChat) !== String(msg.chat.id)) {
-            await tgSendText(msg.chat.id, `✅ Test certificate group me bhej diya gaya hai! Check your discussion / notify chat.`);
+            await tgSendText(msg.chat.id, `✅ Test certificate support topic me bhej diya gaya hai! Wahan check karo.`);
           }
         } catch (e) {
           console.error('[cert] preview failed:', e.message);
@@ -1652,6 +1709,11 @@ app.post('/api/telegram/webhook', async (req, res) => {
     // Requires the bot to have "Delete messages" admin permission there.
     const communityChatId = process.env.COMMUNITY_CHAT_ID;
     if (communityChatId && String(msg.chat.id) === String(communityChatId) && !msg.is_topic_message) {
+      // Anonymous admins (posting as the group itself), channel posts / auto-forwards and
+      // bots are never regular members — they must never get the "please support" nudge.
+      // (Anonymous admin arrives as from = GroupAnonymousBot + sender_chat = this group.)
+      if (!msg.from || msg.sender_chat || msg.from.is_bot ||
+          [1087968824, 136817688, 777000].includes(Number(msg.from.id))) return;
       const userId = msg.from.id;
       const tgDeleteMsg = (msgId) => fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2112,9 +2174,26 @@ app.post('/api/telegram/verify-identity', (req, res) => {
 // SUPPORT CERTIFICATE — Silver / Gold / Platinum image drawn by certificate.js
 // (replaces the old animated GIF/video card system).
 // ---------------------------------------------------------------------------
-async function sendCertificatePhoto(chatId, buffer, caption, replyMarkup) {
+// Where support cards get posted. Priority:
+//   1) the topic saved by an admin running /setsupporttopic inside the topic (Redis 'notify_target')
+//   2) env: TELEGRAM_NOTIFY_CHAT_ID (or TELEGRAM_CHAT_ID) + optional TELEGRAM_NOTIFY_TOPIC_ID
+async function getNotifyTarget() {
+  try {
+    const raw = await redisCommand(['GET', 'notify_target']);
+    if (raw) {
+      const t = JSON.parse(raw);
+      if (t && t.chatId) return { chatId: t.chatId, threadId: t.threadId || null, source: 'bot' };
+    }
+  } catch (e) { /* fall back to env below */ }
+  const chatId = process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID || null;
+  const threadId = process.env.TELEGRAM_NOTIFY_TOPIC_ID ? Number(process.env.TELEGRAM_NOTIFY_TOPIC_ID) : null;
+  return { chatId, threadId: threadId || null, source: 'env' };
+}
+
+async function sendCertificatePhoto(chatId, buffer, caption, replyMarkup, threadId) {
   const form = new FormData();
   form.append('chat_id', String(chatId));
+  if (threadId) form.append('message_thread_id', String(threadId));
   form.append('caption', caption);
   form.append('parse_mode', 'HTML');
   if (replyMarkup) form.append('reply_markup', JSON.stringify(replyMarkup));
@@ -2161,11 +2240,13 @@ app.get('/api/certificate/:id.png', async (req, res) => {
 //    falls back to TELEGRAM_CHAT_ID.
 // ---------------------------------------------------------------------------
 app.post('/api/notify/support', async (req, res) => {
-  const targetChat = process.env.TELEGRAM_NOTIFY_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+  const target = await getNotifyTarget();
+  const targetChat = target.chatId;
+  const targetThread = target.threadId;
   if (!process.env.TELEGRAM_BOT_TOKEN || !targetChat) {
     return res.status(500).json({ sent: false, error: 'Bot token / chat id not configured' });
   }
-  const { id, test, name, username, totalDays, streak, level, title, tierName, xp, theme } = req.body || {};
+  const { id, test, name, username, totalDays, streak, xp } = req.body || {};
 
   // Real numbers come from the saved supporter record, not from whatever the browser claims.
   const devId = (typeof id === 'string' && /^tg_\d+$/.test(id)) ? id : null;
@@ -2177,9 +2258,7 @@ app.post('/api/notify/support', async (req, res) => {
   const d = (rec && rec.totalDays) || totalDays || 1;
   const s = (rec && rec.streak) || streak || 1;
   const who = username ? '@' + username : (certName || 'Someone');
-  const userLvl = level || (d >= 100 ? 8 : d >= 75 ? 7 : d >= 50 ? 6 : d >= 30 ? 5 : d >= 15 ? 4 : d >= 7 ? 3 : d >= 3 ? 2 : 1);
   const userXp = xp || (d * 100);
-  const activeTheme = theme || 'normal';
 
   // Duplicate guard: one post per supporter per total-days value (retried if Telegram failed).
   let lockKey = null;
@@ -2196,43 +2275,19 @@ app.post('/api/notify/support', async (req, res) => {
     } catch (e) { lockKey = null; /* Redis hiccup: better to post than to stay silent */ }
   }
 
-  let caption = '';
-  let buttonText = '🚀 Unlock VIP Pass';
-
-  if (activeTheme === 'diwali') {
-    buttonText = '🪔 Claim Diwali Pass';
-    caption =
-      `🪔 <b>SHUBH DEEPAWALI!</b> 🪔\n` +
-      `👑 <b>DIWALI SPECIAL VIP PASS CLAIMED!</b>\n\n` +
-      `⚡ <b>${who}</b> ne Festival Support complete kiya!\n\n` +
-      `🏆 <b>Title:</b> ${title || 'Diwali Shrestha Patron'}\n` +
-      `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName || 'Grandmaster VIP'}\n` +
-      `🔥 <b>Streak:</b> ${s} Days Unstoppable!\n` +
-      `✨ <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
-      `🪔 <b>Edition:</b> Deepawali Mahotsav 2026 [Verified]\n\n` +
-      `👇 <i>Tum bhi apna Diwali VIP Pass unlock karo:</i>`;
-  } else if (activeTheme === 'navratri') {
-    buttonText = '🚩 Claim Shakti Pass';
-    caption =
-      `🚩 <b>JAI MATA DI!</b> 🚩\n` +
-      `⚡ <b>NAVRATRI SHAKTI PASS UNLOCKED!</b>\n\n` +
-      `👑 <b>${who}</b> ne Navratri Special Support claim kiya!\n\n` +
-      `🏆 <b>Title:</b> ${title || 'Navratri Shakti Yoddha'}\n` +
-      `🎖️ <b>Level:</b> LVL ${userLvl} • ${tierName || 'Shakti Patron'}\n` +
-      `🔥 <b>Streak:</b> ${s} Days Fire Streak!\n` +
-      `💎 <b>Supporter Aura:</b> ${userXp.toLocaleString()} XP\n` +
-      `🚩 <b>Edition:</b> Navratri Special Edition [Verified]\n\n` +
-      `👇 <i>Tum bhi apna Shakti Pass claim karo:</i>`;
-  } else {
-    caption =
-      `👑 <b>ROYAL VIP LEVEL UP!</b> 👑\n\n` +
-      `⚡ <b>${who}</b> reached <b>LEVEL ${userLvl} — ${tierName || 'Grandmaster VIP'}</b>!\n\n` +
-      `🏆 <b>Rank Title:</b> ${title || 'Maha Yoddha (Shahi Patron)'}\n` +
-      `🔥 <b>Streak:</b> ${s} Days Unbroken!\n` +
-      `💎 <b>Power Aura:</b> ${userXp.toLocaleString()} XP\n` +
-      `🎖️ <b>Status:</b> Verified Royal Member\n\n` +
-      `👇 <i>Tum bhi apna VIP Card unlock karo:</i>`;
-  }
+  // Caption matches the certificate image (same tier, days and streak) — no festival editions.
+  const tierKey = tierForDays(d);
+  const tierLabel = tierKey.charAt(0).toUpperCase() + tierKey.slice(1);
+  const tierIcon = tierKey === 'platinum' ? '💎' : tierKey === 'gold' ? '🥇' : '🥈';
+  const buttonText = '🏅 Claim your Certificate';
+  const caption =
+    `${tierIcon} <b>CERTIFICATE OF SUPPORT</b> ${tierIcon}\n\n` +
+    `⚡ <b>${who}</b> ne aaj support complete kiya!\n\n` +
+    `🎖️ <b>Tier:</b> ${tierLabel}\n` +
+    `📅 <b>Total Days:</b> ${d}\n` +
+    `🔥 <b>Streak:</b> ${s} din\n` +
+    `💠 <b>Supporter XP:</b> ${userXp.toLocaleString()}\n\n` +
+    `👇 <i>Tum bhi apna Certificate of Support claim karo:</i>`;
 
   const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
   const replyMarkup = { inline_keyboard: [[{ text: buttonText, url: siteUrl }]] };
@@ -2244,7 +2299,7 @@ app.post('/api/notify/support', async (req, res) => {
         name: certName, totalDays: d, streak: s, tier: tierForDays(d),
         issuedAt: (rec && rec.lastSupportAt) || Date.now(), firstSupportAt: rec && rec.firstSupportAt
       });
-      data = await sendCertificatePhoto(targetChat, img, caption, replyMarkup);
+      data = await sendCertificatePhoto(targetChat, img, caption, replyMarkup, targetThread);
     } catch (e) {
       console.error('[cert] image post failed, falling back to text:', e.message);
     }
@@ -2253,7 +2308,7 @@ app.post('/api/notify/support', async (req, res) => {
       const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: targetChat, text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
+        body: JSON.stringify({ chat_id: targetChat, ...(targetThread ? { message_thread_id: targetThread } : {}), text: caption, parse_mode: 'HTML', reply_markup: replyMarkup })
       });
       data = await r.json();
     }

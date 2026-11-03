@@ -261,13 +261,15 @@ app.post('/api/support/start', async (req, res) => {
   await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false });
   setSessionCookie(res, sessionId);
 
+  const frontendBase = (process.env.FRONTEND_URL || 'https://channel-support.pages.dev').replace(/\/$/, '');
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
+  const customTaskUrl = `${frontendBase}/task-verify.html?step=1&ret=${encodeURIComponent(callbackUrl)}`;
 
   try {
     const cfg = await getShortlinkConfig();
-    if (!cfg.apiKey || !cfg.apiUrl) {
-      console.error('Shortlink provider not configured (no env vars, no /setshortlink config).');
-      return res.status(500).json({ error: 'Shortlink service configured nahi hai. Owner ko /setshortlink use karne bolo.' });
+    // If configured as custom or no external provider API key, use our Adsterra Task Verify system
+    if (cfg.provider === 'custom' || (!cfg.apiKey && !process.env.GPLINKS_API_KEY)) {
+      return res.json({ sessionId, shortlink: customTaskUrl });
     }
     const apiUrl = `${cfg.apiUrl}?api=${cfg.apiKey}&url=${encodeURIComponent(callbackUrl)}`;
     // The shortlink provider is sometimes slow or briefly down: 12 s limit per try, one automatic retry.
@@ -286,16 +288,13 @@ app.post('/api/support/start', async (req, res) => {
 
     const finalLink = data && (data.shortenedUrl || data.short_url);
     if (!finalLink) {
-      // IMPORTANT: never silently fall back to the raw internal callback
-      // URL here — that would let anyone skip the shortlink/ads entirely
-      // (zero-second "support complete" for free). Fail loudly instead.
-      console.error('Shortlink provider did not return a shortened URL:', JSON.stringify(data));
-      return res.status(502).json({ error: 'Shortlink generate nahi ho paya. Provider key/URL check karo (Render logs me detail hai).' });
+      console.warn('External shortlink provider failed, falling back to Custom Ad Task');
+      return res.json({ sessionId, shortlink: customTaskUrl });
     }
     res.json({ sessionId, shortlink: finalLink });
   } catch (err) {
-    console.error('Shortlink API call failed:', err.message);
-    return res.status(502).json({ error: 'Shortlink service se connect nahi ho paya. Thodi der baad try karo.' });
+    console.error('Shortlink API call failed, falling back to Custom Ad Task:', err.message);
+    return res.json({ sessionId, shortlink: customTaskUrl });
   }
 });
 
@@ -833,8 +832,13 @@ async function handleOwnerCommand(text, userId) {
   if (lower.startsWith('/setshortlink')) {
     // /setshortlink <provider> <apiKey> [apiUrl]
     const parts = text.split(/\s+/).slice(1);
+    if (parts[0] && (parts[0].toLowerCase() === 'custom' || parts[0].toLowerCase() === 'ads')) {
+      await setShortlinkConfig({ provider: 'custom', apiKey: '', apiUrl: '' });
+      await tgSendText(userId, `✅ Shortlink provider set to Custom Ad Task (task-verify.html with Adsterra)!\n\nAb users bina kisi shortlink failure ke seedha ads dekh kar support kar sakenge.`);
+      return true;
+    }
     if (parts.length < 2) {
-      await tgSendText(userId, `Usage: /setshortlink <provider> <apiKey> [apiUrl]\n\nExample (GPLinks): /setshortlink gplinks YOUR_API_KEY\nExample (any other provider): /setshortlink vplink YOUR_API_KEY https://api.vplink.in/api`);
+      await tgSendText(userId, `Usage: /setshortlink <provider> <apiKey> [apiUrl]\n\nExample (Custom Ads): /setshortlink custom\nExample (GPLinks): /setshortlink gplinks YOUR_API_KEY\nExample (any other provider): /setshortlink vplink YOUR_API_KEY https://api.vplink.in/api`);
       return true;
     }
     const [provider, apiKey, customUrl] = parts;

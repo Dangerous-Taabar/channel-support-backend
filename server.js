@@ -265,37 +265,8 @@ app.post('/api/support/start', async (req, res) => {
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
   const customTaskUrl = `${frontendBase}/task-verify.html?step=1&ret=${encodeURIComponent(callbackUrl)}`;
 
-  try {
-    const cfg = await getShortlinkConfig();
-    // If configured as custom or no external provider API key, use our Adsterra Task Verify system
-    if (cfg.provider === 'custom' || (!cfg.apiKey && !process.env.GPLINKS_API_KEY)) {
-      return res.json({ sessionId, shortlink: customTaskUrl });
-    }
-    const apiUrl = `${cfg.apiUrl}?api=${cfg.apiKey}&url=${encodeURIComponent(callbackUrl)}`;
-    // The shortlink provider is sometimes slow or briefly down: 12 s limit per try, one automatic retry.
-    let data;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const r = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
-        data = await r.json();
-        break;
-      } catch (e) {
-        console.error(`Shortlink API attempt ${attempt} failed:`, e.name, e.message);
-        if (attempt === 2) throw e;
-      }
-    }
-    console.log('Shortlink API response:', JSON.stringify(data));
-
-    const finalLink = data && (data.shortenedUrl || data.short_url);
-    if (!finalLink) {
-      console.warn('External shortlink provider failed, falling back to Custom Ad Task');
-      return res.json({ sessionId, shortlink: customTaskUrl });
-    }
-    res.json({ sessionId, shortlink: finalLink });
-  } catch (err) {
-    console.error('Shortlink API call failed, falling back to Custom Ad Task:', err.message);
-    return res.json({ sessionId, shortlink: customTaskUrl });
-  }
+  // ALWAYS return our Custom Adsterra 3-Step Verification Task (GPLinks completely bypassed)
+  return res.json({ sessionId, shortlink: customTaskUrl });
 });
 
 // ---------------------------------------------------------------------------

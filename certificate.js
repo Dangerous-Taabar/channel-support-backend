@@ -130,4 +130,9 @@ async function renderCertificate(opts) {
   return opts.format === 'png' ? canvas.encode('png') : canvas.encode('jpeg', 94);
 }
 
-module.exports = { renderCertificate, tierForDays, cleanName };
+function clearTemplateCache(tier) {
+  if (tier) templates.delete(tier);
+  else templates.clear();
+}
+
+module.exports = { renderCertificate, tierForDays, cleanName, clearTemplateCache };

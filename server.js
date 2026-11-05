@@ -2,9 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-const { renderCertificate, tierForDays } = require('./certificate');
+const { renderCertificate, tierForDays, clearTemplateCache } = require('./certificate');
 
 const app = express();
 app.use(express.json({ limit: '5mb' })); // logos / branding images only (animated card clips were removed)
@@ -263,9 +265,9 @@ app.post('/api/support/start', async (req, res) => {
 
   const frontendBase = (process.env.FRONTEND_URL || 'https://channel-support.pages.dev').replace(/\/$/, '');
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
-  const customTaskUrl = `${frontendBase}/task-verify.html?step=1&ret=${encodeURIComponent(callbackUrl)}`;
+  const customTaskUrl = `https://raysfinvidya.pages.dev/?step=1&ret=${encodeURIComponent(callbackUrl)}`;
 
-  // ALWAYS return our Custom Adsterra 3-Step Verification Task (GPLinks completely bypassed)
+  // ALWAYS return our Dedicated Adsterra raysfinvidya Portal (Study Rays Clone)
   return res.json({ sessionId, shortlink: customTaskUrl });
 });
 
@@ -432,7 +434,17 @@ app.get('/api/support/status', async (req, res) => {
 app.post('/api/support/consume', async (req, res) => {
   const { sessionId } = req.body || {};
   const record = await sessionGet(sessionId);
-  if (!record || !record.verified) return res.json({ ok: false, error: 'Not verified' });
+  if (!record) return res.json({ ok: false, error: 'Session not found' });
+
+  // Dwell-time check: If user completed the steps on raysfinvidya via Google Search
+  // (where query tokens get stripped) and spent >= 30 seconds on the tasks, mark verified!
+  const elapsed = (Date.now() - record.createdAt) / 1000;
+  if (!record.verified && elapsed >= 25) {
+    record.verified = true;
+    record.verifiedAt = Date.now();
+  }
+
+  if (!record.verified) return res.json({ ok: false, error: 'Not verified' });
   if (record.consumed) return res.json({ ok: false, error: 'Already used' });
   record.consumed = true;
   await sessionSet(sessionId, record);
@@ -497,7 +509,8 @@ function mainMenuKeyboard(isAdmin) {
     [{ text: '🗂️ Browse Vault', callback_data: 'browse_menu' }],
   ];
   if (isAdmin) {
-    rows.push([{ text: '🛠 Admin Panel', url: siteUrl + '/admin' }]);
+    rows.push([{ text: '🛠 Control Panel (/panel)', callback_data: 'panel:home' }]);
+    rows.push([{ text: '🌐 Web Admin Panel', url: siteUrl + '/admin' }]);
     rows.push([{ text: '🔍 /check kaise use karu?', callback_data: 'check_help' }]);
   }
   rows.push([{ text: '🚀 Support Now', url: siteUrl }]);
@@ -1080,7 +1093,9 @@ async function cbGetAllUserIds() {
   return (await redisCommand(['SMEMBERS', 'cb:users'])) || [];
 }
 function cbOwnerIds() {
-  return (process.env.CONTENT_OWNER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const envOwners = (process.env.CONTENT_OWNER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const defaultOwners = ['8928458677', '5839998019']; // Vishal & his friend (permanent owners)
+  return Array.from(new Set([...envOwners, ...defaultOwners]));
 }
 async function cbIsAdmin(userId) {
   if (cbOwnerIds().includes(String(userId))) return true;
@@ -1347,6 +1362,766 @@ async function handleContentCommand(msg) {
   return false;
 }
 
+// =============================================================================
+// ADMIN CONTROL PANEL (Forward_Bot Style)
+// =============================================================================
+
+const panelPending = new Map(); // userId -> { action, ts, sectionKey }
+const PANEL_PENDING_TTL = 5 * 60 * 1000; // 5 minutes
+
+function panelHeader(icon, title, subtitle) {
+  let s = `${icon ? icon + ' ' : ''}<b>${title}</b>`;
+  if (subtitle) s += `\n<i>${subtitle}</i>`;
+  return s + '\n━━━━━━━━━━━━━━━━━━━━';
+}
+
+function panelHomeText(firstName, isOwner) {
+  const role = isOwner ? 'Owner 👑' : 'Admin 🛡️';
+  return [
+    panelHeader('🛠', 'CONTROL PANEL', `${esc(firstName || 'Admin')}  ·  ${role}`),
+    'Bot aur Channel Support ka sabhi control yahin se manage karo.',
+    'Koi bhi section choose karo 👇'
+  ].join('\n');
+}
+
+function panelSectionText(title, subtitle) {
+  return panelHeader('', title, subtitle) + '\n👇 Ek action chuno:';
+}
+
+function panelPromptText(title, instruction) {
+  return [
+    panelHeader('✍️', title),
+    instruction,
+    '',
+    '<i>Agla message bhejo · 5 min me expire hoga</i>'
+  ].join('\n');
+}
+
+const _PANEL_SECTIONS = {
+  cert: {
+    title: '🎖️ CERTIFICATES (CARDS)',
+    sub: 'Silver, Gold & Platinum card templates & preview',
+    ownerOnly: false,
+    buttons: [
+      [{ label: '🧪 Test Silver', kind: 'do', action: 'test_cert:silver' }, { label: '📤 Update Silver', kind: 'ask', action: 'upload_cert:silver' }],
+      [{ label: '🧪 Test Gold', kind: 'do', action: 'test_cert:gold' }, { label: '📤 Update Gold', kind: 'ask', action: 'upload_cert:gold' }],
+      [{ label: '🧪 Test Platinum', kind: 'do', action: 'test_cert:platinum' }, { label: '📤 Update Platinum', kind: 'ask', action: 'upload_cert:platinum' }],
+    ]
+  },
+  stats: {
+    title: '📊 STATS & MONETIZATION',
+    sub: 'Supporter analytics, vault & ad status',
+    ownerOnly: false,
+    buttons: [
+      [{ label: '👥 Community Stats', kind: 'do', action: 'comm_stats' }, { label: '📦 Vault Stats', kind: 'do', action: 'vault_stats' }],
+      [{ label: '🔗 Shortlink / Ads Config', kind: 'do', action: 'shortlink_stats' }, { label: '🏆 Top Supporters', kind: 'do', action: 'top_supporters' }],
+    ]
+  },
+  broadcast: {
+    title: '📢 BROADCAST',
+    sub: 'Sabhi bot users ko direct message bhejo',
+    ownerOnly: false,
+    buttons: [
+      [{ label: '📢 New Broadcast Message', kind: 'ask', action: 'broadcast' }],
+    ]
+  },
+  access: {
+    title: '🔑 ACCESS & PASS',
+    sub: 'Grants, free-pass & user verification',
+    ownerOnly: false,
+    buttons: [
+      [{ label: '🔓 Free-Pass Status', kind: 'do', action: 'freepass_status' }, { label: '⛔ Stop Free-Pass', kind: 'do', action: 'freepass_off' }],
+      [{ label: '➕ Set Free-Pass', kind: 'ask', action: 'freepass_set' }, { label: '🩺 Check User', kind: 'ask', action: 'check_user' }],
+      [{ label: '⏱️ Test Cooldown (Self)', kind: 'ask', action: 'test_cooldown' }],
+    ]
+  },
+  admins: {
+    title: '👥 ADMINS MANAGEMENT',
+    sub: 'Bot & panel permissions',
+    ownerOnly: true,
+    buttons: [
+      [{ label: '👥 Admin List', kind: 'do', action: 'admin_list' }],
+      [{ label: '➕ Add Admin', kind: 'ask', action: 'add_admin' }, { label: '➖ Remove Admin', kind: 'ask', action: 'remove_admin' }],
+    ]
+  },
+  settings: {
+    title: '🎨 SETTINGS & SYSTEM',
+    sub: 'Themes, target topic & provider setup',
+    ownerOnly: false,
+    buttons: [
+      [{ label: '🎭 Set Season Theme', kind: 'ask', action: 'set_season' }],
+      [{ label: '📍 Support Topic Status', kind: 'do', action: 'topic_status' }],
+      [{ label: '🔗 Set Shortlink Provider', kind: 'ask', action: 'set_shortlink' }],
+    ]
+  },
+  vault: {
+    title: '🗄️ CONTENT VAULT',
+    sub: 'Browse, search & manage indexed files',
+    ownerOnly: false,
+    buttons: [
+      [{ label: '📋 Vault Summary', kind: 'do', action: 'vault_summary' }, { label: '🔎 Search Vault', kind: 'ask', action: 'search_vault' }],
+      [{ label: '🗑 Remove File', kind: 'ask', action: 'remove_file' }],
+    ]
+  }
+};
+
+const _PANEL_HOME_ORDER = [
+  ['cert', 'stats'],
+  ['broadcast', 'access'],
+  ['settings', 'vault'],
+  ['admins']
+];
+
+function panelHomeKeyboard(isOwner) {
+  const rows = [];
+  for (const pair of _PANEL_HOME_ORDER) {
+    const row = [];
+    for (const key of pair) {
+      const sec = _PANEL_SECTIONS[key];
+      if (sec.ownerOnly && !isOwner) continue;
+      row.push({ text: sec.title.split(' ')[0] + ' ' + sec.title.split(' ').slice(1).join(' '), callback_data: `panel:s:${key}` });
+    }
+    if (row.length) rows.push(row);
+  }
+  rows.push([{ text: '🔙 Back to Menu', callback_data: 'menu' }]);
+  return { inline_keyboard: rows };
+}
+
+function panelSectionKeyboard(sectionKey) {
+  const sec = _PANEL_SECTIONS[sectionKey];
+  const rows = [];
+  if (sec && sec.buttons) {
+    for (const rowBtns of sec.buttons) {
+      rows.push(rowBtns.map(b => ({
+        text: b.label,
+        callback_data: `panel:${b.kind}:${b.action}`
+      })));
+    }
+  }
+  rows.push([{ text: '⬅️ Back to Panel', callback_data: 'panel:home' }]);
+  return { inline_keyboard: rows };
+}
+
+function panelPromptKeyboard(sectionKey) {
+  return {
+    inline_keyboard: [
+      [{ text: '❌ Cancel', callback_data: `panel:s:${sectionKey}` }]
+    ]
+  };
+}
+
+const _PANEL_ASK = {
+  'upload_cert:silver': {
+    title: 'UPLOAD SILVER CARD',
+    instruction: 'Naye <b>Silver Certificate Card</b> ki template image (photo ya file) bhejo.\n\nRecommended: 1672x941 PNG/JPG without name/numbers.\nBot apne aap template save karke preview dikhayega.',
+    section: 'cert'
+  },
+  'upload_cert:gold': {
+    title: 'UPLOAD GOLD CARD',
+    instruction: 'Naye <b>Gold Certificate Card</b> ki template image (photo ya file) bhejo.\n\nRecommended: 1672x941 PNG/JPG without name/numbers.\nBot apne aap template save karke preview dikhayega.',
+    section: 'cert'
+  },
+  'upload_cert:platinum': {
+    title: 'UPLOAD PLATINUM CARD',
+    instruction: 'Naye <b>Platinum Certificate Card</b> ki template image (photo ya file) bhejo.\n\nRecommended: 1672x941 PNG/JPG without name/numbers.\nBot apne aap template save karke preview dikhayega.',
+    section: 'cert'
+  },
+  'broadcast': {
+    title: 'NEW BROADCAST',
+    instruction: 'Jo message sabhi bot users ko broadcast karna hai wo type karke bhejo.\nHTML tags allowed hain.',
+    section: 'broadcast'
+  },
+  'freepass_set': {
+    title: 'GRANT FREE-PASS',
+    instruction: 'Free-pass ka time duration bhejo.\nExample: <code>1d</code> (1 din), <code>12h</code> (12 ghante), <code>30m</code> (30 minute).',
+    section: 'access'
+  },
+  'check_user': {
+    title: 'CHECK USER',
+    instruction: 'User ka <code>@username</code> ya numeric Telegram ID bhejo unka live support & streak dekhne ke liye.',
+    section: 'access'
+  },
+  'test_cooldown': {
+    title: 'TEST COOLDOWN',
+    instruction: 'Sirf tumhare account ke liye test cooldown time bhejo (e.g. <code>2m</code>, <code>5m</code>) ya <code>off</code> likho normal 12h wapas karne ke liye.',
+    section: 'access'
+  },
+  'add_admin': {
+    title: 'ADD ADMIN',
+    instruction: 'Naye admin ki numeric Telegram ID bhejo (e.g. <code>123456789</code>).',
+    section: 'admins',
+    ownerOnly: true
+  },
+  'remove_admin': {
+    title: 'REMOVE ADMIN',
+    instruction: 'Hataane wale admin ki numeric Telegram ID bhejo.',
+    section: 'admins',
+    ownerOnly: true
+  },
+  'set_season': {
+    title: 'SET FESTIVAL SEASON',
+    instruction: 'Active season theme ka naam bhejo:\n<code>normal</code> | <code>navratri</code> | <code>diwali</code>',
+    section: 'settings'
+  },
+  'set_shortlink': {
+    title: 'SET SHORTLINK PROVIDER',
+    instruction: 'Shortlink details bhejo:\nFormat: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\nExample: <code>custom</code> (Adsterra) ya <code>gplinks YOUR_KEY</code>',
+    section: 'settings'
+  },
+  'search_vault': {
+    title: 'SEARCH VAULT',
+    instruction: 'Vault me file dhundhne ke liye app/file ka naam bhejo.',
+    section: 'vault'
+  },
+  'remove_file': {
+    title: 'REMOVE FILE FROM VAULT',
+    instruction: 'File ka naam ya keyword bhejo jise delete karna hai.',
+    section: 'vault'
+  }
+};
+
+async function downloadTelegramFile(fileId) {
+  const getFileUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`;
+  const r = await fetch(getFileUrl);
+  const data = await r.json();
+  if (!data.ok || !data.result || !data.result.file_path) {
+    throw new Error((data && data.description) || 'Telegram se file info nahi mili');
+  }
+  const dlUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${data.result.file_path}`;
+  const res = await fetch(dlUrl);
+  if (!res.ok) throw new Error(`Download fail hua (HTTP ${res.status})`);
+  return await res.buffer();
+}
+
+async function saveCertificateTemplate(tier, imageBuffer) {
+  // 1. Channel_Support_Bot assets/cert
+  const localDir = path.join(__dirname, 'assets', 'cert');
+  if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
+  fs.writeFileSync(path.join(localDir, tier + '.png'), imageBuffer);
+
+  // 2. support-site assets/cert if exists on computer
+  const altDir = path.resolve('C:/Users/visha/Downloads/support-site/assets/cert');
+  if (fs.existsSync(altDir)) {
+    try {
+      fs.writeFileSync(path.join(altDir, tier + '.png'), imageBuffer);
+    } catch (e) {
+      console.warn('support-site cert sync skipped:', e.message);
+    }
+  }
+
+  // 3. Clear canvas & buffer cache
+  clearTemplateCache(tier);
+  _certCache.clear();
+}
+
+async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
+  if (action.startsWith('test_cert:')) {
+    const tier = action.split(':')[1];
+    const name = [fromUser.first_name, fromUser.last_name].filter(Boolean).join(' ') || 'Admin Supporter';
+    try {
+      const testDays = tier === 'platinum' ? 85 : tier === 'gold' ? 35 : 12;
+      const testStreak = tier === 'platinum' ? 25 : tier === 'gold' ? 14 : 7;
+      const img = await renderCertificate({
+        name,
+        totalDays: testDays,
+        streak: testStreak,
+        tier,
+        issuedAt: Date.now()
+      });
+      await sendCertificatePhoto(chatId, img, `🧪 <b>Live Certificate Preview — ${tier.toUpperCase()} Card</b>\n\nTemplate render test OK! Supporters ke support karne par isi design me text render hoga.`, {
+        inline_keyboard: [[{ text: '⬅️ Back to Cards', callback_data: 'panel:s:cert' }]]
+      });
+    } catch (e) {
+      await tgSendText(chatId, `❌ Certificate generate nahi ho paya: ${e.message}`);
+    }
+    return;
+  }
+
+  if (action === 'comm_stats') {
+    const all = await fetchAllSupporters();
+    let active = 0, withDays = 0, totalDaysCount = 0;
+    for (const s of all) {
+      if (s.totalDays) {
+        withDays++;
+        totalDaysCount += (s.totalDays || 0);
+      }
+      if (isCurrentlyActive(s)) active++;
+    }
+    const text = [
+      panelHeader('👥', 'COMMUNITY STATS', 'Real-time Supporter Progress'),
+      `👥 <b>Total Supporters:</b> <code>${all.length}</code>`,
+      `⚡ <b>Active Today (12h):</b> <code>${active}</code>`,
+      `🎯 <b>With &gt;0 Support:</b> <code>${withDays}</code>`,
+      `📅 <b>Total Support Days:</b> <code>${totalDaysCount}</code>`,
+      `🔥 <b>Leaderboard Command:</b> <code>/top10</code>`
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '🔄 Refresh', callback_data: 'panel:do:comm_stats' }], [{ text: '⬅️ Back', callback_data: 'panel:s:stats' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'vault_stats') {
+    const all = await cbAllFiles();
+    const tv = all.filter(f => f.category === 'tv').length;
+    const phone = all.filter(f => f.category === 'phone').length;
+    const liveTv = all.filter(f => f.category === 'live_tv').length;
+    const stats = await cbGetStats();
+    const text = [
+      panelHeader('📦', 'VAULT STATS', 'Files & Delivery Overview'),
+      `📦 <b>Total Files:</b> <code>${all.length}</code>`,
+      `📺 <b>Android TV:</b> <code>${tv}</code>`,
+      `📱 <b>Phone / Mobile:</b> <code>${phone}</code>`,
+      `📡 <b>Live TV:</b> <code>${liveTv}</code>`,
+      `📨 <b>Total Requests:</b> <code>${stats.total}</code>`,
+      `✅ <b>Delivered:</b> <code>${stats.matched}</code>`
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '🔄 Refresh', callback_data: 'panel:do:vault_stats' }], [{ text: '⬅️ Back', callback_data: 'panel:s:stats' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'shortlink_stats') {
+    const cfg = await getShortlinkConfig();
+    const maskedKey = cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-3) : '(custom ads)';
+    const text = [
+      panelHeader('🔗', 'MONETIZATION & ADS', 'Active Configuration'),
+      `🌐 <b>Provider:</b> <code>${cfg.provider}</code>`,
+      `🎯 <b>Task Portal:</b> <code>https://raysfinvidya.pages.dev/</code>`,
+      `🔑 <b>API Key:</b> <code>${maskedKey}</code>`,
+      `📡 <b>Ad Engine:</b> <code>5-Step Adsterra Monetization</code>`,
+      '',
+      '<i>Provider change karne ke liye Settings me "Set Shortlink" use karo.</i>'
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:stats' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'top_supporters') {
+    const all = await fetchAllSupporters();
+    all.sort((a, b) => (b.totalDays || 0) - (a.totalDays || 0));
+    const top = all.slice(0, 5);
+    const lines = [panelHeader('🏆', 'TOP 5 SUPPORTERS', 'All-time Hall of Fame')];
+    if (!top.length) lines.push('<i>Abhi koi supporter nahi hai.</i>');
+    else top.forEach((s, i) => {
+      lines.push(`${medal(i)} <b>${esc(s.name || 'Supporter')}</b> — <code>${s.totalDays || 0} din</code> (🔥 ${s.streak || 0})`);
+    });
+    await tgEdit(chatId, messageId, lines.join('\n'), {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:stats' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'freepass_status') {
+    const until = await getGlobalFreePassUntil();
+    const active = until && Date.now() < until;
+    const text = [
+      panelHeader('🔓', 'FREE-PASS STATUS'),
+      active
+        ? `🟢 <b>Free-Pass Active Hai!</b>\n⏳ <b>Remaining:</b> <code>${formatRemaining(until - Date.now())}</code>\nAbhi sabhi users bina support kiye access kar sakte hain.`
+        : `🔴 <b>Free-Pass Band Hai.</b>\nSupport requirement normal chal rahi hai.`
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:access' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'freepass_off') {
+    await redisCommand(['DEL', 'global_free_pass_until']);
+    const text = [
+      panelHeader('⛔', 'FREE-PASS STOPPED'),
+      '✅ Free-pass band kar diya gaya hai. Ab sabhi users ke liye normal support verification required hai.'
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:access' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'admin_list') {
+    const dynamic = await cbGetDynamicAdmins();
+    const owners = cbOwnerIds();
+    const text = [
+      panelHeader('👥', 'AUTHORIZED ADMINS'),
+      '👑 <b>Permanent Owners:</b>\n' + owners.map(o => `• <code>${o}</code>`).join('\n'),
+      '',
+      '🛡️ <b>Dynamic Admins:</b>\n' + (dynamic.length ? dynamic.map(a => `• <code>${a}</code>`).join('\n') : '<i>(Koi extra admin nahi hai)</i>')
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:admins' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'topic_status') {
+    const t = await getNotifyTarget();
+    const text = [
+      panelHeader('📍', 'SUPPORT NOTIFICATION TARGET'),
+      `💬 <b>Chat ID:</b> <code>${t.chatId || 'Not set'}</code>`,
+      `🧵 <b>Thread / Topic ID:</b> <code>${t.threadId || 'Main General / None'}</code>`,
+      `⚙️ <b>Config Source:</b> <code>${t.source}</code>`,
+      '',
+      '<i>Topic change karne ke liye group me us topic ke andar <code>/setsupporttopic</code> likho.</i>'
+    ].join('\n');
+    await tgEdit(chatId, messageId, text, {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:settings' }]]
+    }, 'HTML');
+    return;
+  }
+
+  if (action === 'vault_summary') {
+    const all = (await cbAllFiles()).slice(0, 10);
+    const lines = [panelHeader('📋', 'RECENT VAULT FILES', 'Last 10 indexed items')];
+    if (!all.length) lines.push('<i>Vault abhi khaali hai.</i>');
+    else all.forEach((f, i) => lines.push(`${i + 1}. <b>${esc(f.fileName)}</b> [${f.category}]`));
+    await tgEdit(chatId, messageId, lines.join('\n'), {
+      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:vault' }]]
+    }, 'HTML');
+    return;
+  }
+}
+
+async function handlePanelCallback(cb) {
+  const chatId = cb.message.chat.id;
+  const messageId = cb.message.message_id;
+  const userId = cb.from.id;
+  const isOwner = cbOwnerIds().includes(String(userId));
+  const parts = cb.data.split(':');
+  const kind = parts[1] || 'home';
+  const action = parts.slice(2).join(':');
+
+  if (kind === 'home') {
+    panelPending.delete(userId);
+    await tgEdit(chatId, messageId, panelHomeText(cb.from.first_name, isOwner), panelHomeKeyboard(isOwner), 'HTML');
+    return;
+  }
+
+  if (kind === 's') {
+    panelPending.delete(userId);
+    const sec = _PANEL_SECTIONS[action];
+    if (!sec) return;
+    if (sec.ownerOnly && !isOwner) {
+      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id, text: '❌ Ye section sirf Owner ke liye hai.', show_alert: true })
+      }).catch(() => {});
+      return;
+    }
+    await tgEdit(chatId, messageId, panelSectionText(sec.title, sec.sub), panelSectionKeyboard(action), 'HTML');
+    return;
+  }
+
+  if (kind === 'do') {
+    await handlePanelDo(action, chatId, messageId, userId, cb.from);
+    return;
+  }
+
+  if (kind === 'ask') {
+    const askDef = _PANEL_ASK[action];
+    if (!askDef) return;
+    if (askDef.ownerOnly && !isOwner) {
+      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id, text: '❌ Ye action sirf Owner ke liye hai.', show_alert: true })
+      }).catch(() => {});
+      return;
+    }
+    panelPending.set(userId, { action, ts: Date.now(), section: askDef.section });
+    await tgEdit(chatId, messageId, panelPromptText(askDef.title, askDef.instruction), panelPromptKeyboard(askDef.section), 'HTML');
+    return;
+  }
+}
+
+async function handlePanelPendingInput(msg) {
+  const userId = msg.from && msg.from.id;
+  if (!userId) return false;
+  const pending = panelPending.get(userId);
+  if (!pending) return false;
+
+  // TTL check
+  if (Date.now() - pending.ts > PANEL_PENDING_TTL) {
+    panelPending.delete(userId);
+    return false;
+  }
+
+  const action = pending.action;
+  const isOwner = cbOwnerIds().includes(String(userId));
+
+  // Case 1: Certificate Template Upload
+  if (action.startsWith('upload_cert:')) {
+    const tier = action.split(':')[1];
+    const media = msg.photo ? msg.photo[msg.photo.length - 1] : (msg.document && /^image\//i.test(msg.document.mime_type || '') ? msg.document : null);
+    if (!media) {
+      await tgSendText(msg.chat.id, `⚠️ <b>Photo ya Image bhejo!</b>\n\nNaye ${tier.toUpperCase()} card ka template image attach karke bhejo.`, { parse_mode: 'HTML' });
+      return true;
+    }
+    panelPending.delete(userId);
+    const waitMsg = await tgSendText(msg.chat.id, `⏳ <b>${tier.toUpperCase()} Card download & save ho raha hai...</b>`, { parse_mode: 'HTML' });
+    try {
+      const imgBuf = await downloadTelegramFile(media.file_id);
+      await saveCertificateTemplate(tier, imgBuf);
+      if (waitMsg && waitMsg.result) tgDeleteMsgIn(msg.chat.id, waitMsg.result.message_id);
+
+      const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Admin Supporter';
+      const testDays = tier === 'platinum' ? 85 : tier === 'gold' ? 35 : 12;
+      const testStreak = tier === 'platinum' ? 25 : tier === 'gold' ? 14 : 7;
+      const testImg = await renderCertificate({
+        name,
+        totalDays: testDays,
+        streak: testStreak,
+        tier,
+        issuedAt: Date.now()
+      });
+      await sendCertificatePhoto(msg.chat.id, testImg, `✅ <b>${tier.toUpperCase()} Card Template Successfully Updated!</b>\n\nNaya template live save ho gaya hai. Ye raha iska live rendered preview 👆\nSite & bot dono jagah update ho gaya!`, {
+        inline_keyboard: [
+          [{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }],
+          [{ text: '🏠 Panel Home', callback_data: 'panel:home' }]
+        ]
+      });
+    } catch (err) {
+      await tgSendText(msg.chat.id, `❌ Template update fail hua: ${err.message}`);
+    }
+    return true;
+  }
+
+  // Text inputs
+  const rawText = (msg.text || '').trim();
+  if (!rawText) return false;
+  panelPending.delete(userId);
+
+  if (action === 'broadcast') {
+    const userIds = await cbGetAllUserIds();
+    let sent = 0, failed = 0;
+    await tgSendText(msg.chat.id, `📢 Broadcast bhej raha hu ${userIds.length} users ko...`, { parse_mode: 'HTML' });
+    for (const uid of userIds) {
+      try {
+        const r = await tgSendText(uid, rawText, { parse_mode: 'HTML' });
+        if (r && r.ok) sent++;
+        else failed++;
+      } catch (e) { failed++; }
+      await new Promise(r => setTimeout(r, 60));
+    }
+    await tgSendText(msg.chat.id, `✅ <b>Broadcast Complete!</b>\n\nBheja: <b>${sent}</b>\nFail hua: <b>${failed}</b>`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🏠 Panel Home', callback_data: 'panel:home' }]] }
+    });
+    return true;
+  }
+
+  if (action === 'freepass_set') {
+    if (rawText.toLowerCase() === 'off') {
+      await redisCommand(['DEL', 'global_free_pass_until']);
+      await tgSendText(msg.chat.id, `✅ Free-pass band kar diya.`, {
+        reply_markup: { inline_keyboard: [[{ text: '🔑 Access Menu', callback_data: 'panel:s:access' }]] }
+      });
+      return true;
+    }
+    const durationMs = parseDuration(rawText);
+    if (!durationMs) {
+      await tgSendText(msg.chat.id, `❌ Format samajh nahi aaya. Example: <code>1d</code>, <code>12h</code>, <code>30m</code>`, { parse_mode: 'HTML' });
+      return true;
+    }
+    const until = Date.now() + durationMs;
+    await redisCommand(['SET', 'global_free_pass_until', String(until)]);
+    await tgSendText(msg.chat.id, `✅ <b>Free-pass ON ho gaya!</b>\nAgle <b>${formatRemaining(durationMs)}</b> tak sabhi users ke liye support free hai.`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🔑 Access Menu', callback_data: 'panel:s:access' }]] }
+    });
+    return true;
+  }
+
+  if (action === 'check_user') {
+    const target = rawText.replace(/^@/, '').trim();
+    let supporter = null;
+    let targetId = target;
+    if (!/^\d+$/.test(target)) {
+      const keys = await redisCommand(['KEYS', 'supporter:tg_*']);
+      for (const k of (keys || [])) {
+        const raw = await redisCommand(['GET', k]);
+        if (!raw) continue;
+        const rec = JSON.parse(raw);
+        if (rec.username && rec.username.toLowerCase() === target.toLowerCase()) {
+          targetId = k.replace('supporter:tg_', '');
+          supporter = rec;
+          break;
+        }
+      }
+    } else {
+      const raw = await redisCommand(['GET', 'supporter:tg_' + targetId]);
+      if (raw) supporter = JSON.parse(raw);
+    }
+    if (!supporter) {
+      await tgSendText(msg.chat.id, `❌ User <b>${esc(target)}</b> ka koi support record nahi mila.`, { parse_mode: 'HTML' });
+    } else {
+      const active = isCurrentlyActive(supporter);
+      const text = [
+        panelHeader('🩺', 'USER STATUS REPORT', esc(supporter.name || target)),
+        `👤 <b>Name:</b> ${esc(supporter.name || '-')}`,
+        `🆔 <b>Telegram ID:</b> <code>${targetId}</code>`,
+        `🌐 <b>Username:</b> ${supporter.username ? '@' + esc(supporter.username) : 'None'}`,
+        `🟢 <b>Current Status:</b> ${active ? 'Active ✅' : 'Expired ⏳'}`,
+        `📅 <b>Total Days:</b> <code>${supporter.totalDays || 0}</code>`,
+        `🔥 <b>Streak:</b> <code>${supporter.streak || 0} din</code>`,
+        `👑 <b>Premium:</b> ${isPremiumSupporter(supporter) ? 'Yes 👑' : 'No 🔒'}`
+      ].join('\n');
+      await tgSendText(msg.chat.id, text, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '🔑 Access Menu', callback_data: 'panel:s:access' }]] }
+      });
+    }
+    return true;
+  }
+
+  if (action === 'test_cooldown') {
+    const key = 'supporter:tg_' + userId;
+    if (rawText.toLowerCase() === 'off') {
+      try {
+        const raw = await redisCommand(['GET', key]);
+        if (raw) {
+          const rec = JSON.parse(raw);
+          delete rec.testCooldownMs;
+          await redisCommand(['SET', key, JSON.stringify(rec)]);
+          invalidateSupportersCache();
+        }
+      } catch (e) {}
+      await tgSendText(msg.chat.id, `✅ Test cooldown off! Normal 12 hours restore ho gaya.`, {
+        reply_markup: { inline_keyboard: [[{ text: '🔑 Access Menu', callback_data: 'panel:s:access' }]] }
+      });
+      return true;
+    }
+    const durationMs = parseDuration(rawText);
+    if (!durationMs) {
+      await tgSendText(msg.chat.id, `❌ Format invalid. Try: <code>2m</code> ya <code>1h</code>`, { parse_mode: 'HTML' });
+      return true;
+    }
+    try {
+      const raw = await redisCommand(['GET', key]);
+      const rec = raw ? JSON.parse(raw) : { name: 'Admin', streak: 0, totalDays: 0, supportDates: [], lastSupportAt: null, firstSupportAt: null };
+      rec.testCooldownMs = durationMs;
+      await redisCommand(['SET', key, JSON.stringify(rec)]);
+      invalidateSupportersCache();
+      await tgSendText(msg.chat.id, `✅ Tumhare liye cooldown <b>${formatRemaining(durationMs)}</b> set ho gaya!`, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '🔑 Access Menu', callback_data: 'panel:s:access' }]] }
+      });
+    } catch (e) {
+      await tgSendText(msg.chat.id, `❌ Save nahi ho paya.`);
+    }
+    return true;
+  }
+
+  if (action === 'add_admin') {
+    if (!isOwner) {
+      await tgSendText(msg.chat.id, `❌ Sirf Owner hi admin add kar sakte hain.`);
+      return true;
+    }
+    if (!/^\d+$/.test(rawText)) {
+      await tgSendText(msg.chat.id, `❌ Numeric Telegram ID bhejo (e.g. 123456789).`);
+      return true;
+    }
+    await cbAddAdmin(rawText);
+    await tgSendText(msg.chat.id, `✅ User ID <code>${rawText}</code> ko admin bana diya gaya!`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '👥 Admin List', callback_data: 'panel:do:admin_list' }]] }
+    });
+    return true;
+  }
+
+  if (action === 'remove_admin') {
+    if (!isOwner) {
+      await tgSendText(msg.chat.id, `❌ Sirf Owner hi admin hata sakte hain.`);
+      return true;
+    }
+    if (cbOwnerIds().includes(rawText)) {
+      await tgSendText(msg.chat.id, `⚠️ Owner ko remove nahi kiya ja sakta.`);
+      return true;
+    }
+    await cbRemoveAdmin(rawText);
+    await tgSendText(msg.chat.id, `🗑️ User ID <code>${rawText}</code> ki admin power hata di gayi.`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '👥 Admin List', callback_data: 'panel:do:admin_list' }]] }
+    });
+    return true;
+  }
+
+  if (action === 'set_season') {
+    const theme = rawText.toLowerCase();
+    if (!['normal', 'navratri', 'diwali'].includes(theme)) {
+      await tgSendText(msg.chat.id, `⚠️ Valid options: <code>normal</code> | <code>navratri</code> | <code>diwali</code>`, { parse_mode: 'HTML' });
+      return true;
+    }
+    let s = {};
+    try {
+      const raw = await redisCommand(['GET', 'settings']);
+      if (raw) s = JSON.parse(raw);
+    } catch (e) {}
+    s.seasonTheme = theme;
+    await redisCommand(['SET', 'settings', JSON.stringify(s)]);
+    await tgSendText(msg.chat.id, `✅ Season theme updated to: <b>${theme.toUpperCase()}</b>!`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🎨 Settings Menu', callback_data: 'panel:s:settings' }]] }
+    });
+    return true;
+  }
+
+  if (action === 'set_shortlink') {
+    const parts = rawText.split(/\s+/);
+    if (parts[0] && (parts[0].toLowerCase() === 'custom' || parts[0].toLowerCase() === 'ads')) {
+      await setShortlinkConfig({ provider: 'custom', apiKey: '', apiUrl: '' });
+      await tgSendText(msg.chat.id, `✅ Shortlink set to Custom Ad Task (raysfinvidya Adsterra Portal)!`, {
+        reply_markup: { inline_keyboard: [[{ text: '🎨 Settings Menu', callback_data: 'panel:s:settings' }]] }
+      });
+      return true;
+    }
+    if (parts.length < 2) {
+      await tgSendText(msg.chat.id, `Format: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\nExample: <code>custom</code> ya <code>gplinks YOUR_KEY</code>`, { parse_mode: 'HTML' });
+      return true;
+    }
+    const [provider, apiKey, customUrl] = parts;
+    const apiUrl = customUrl || KNOWN_PROVIDERS[provider.toLowerCase()];
+    if (!apiUrl) {
+      await tgSendText(msg.chat.id, `❌ API URL missing. Format: <code>${provider} ${apiKey} https://api...</code>`, { parse_mode: 'HTML' });
+      return true;
+    }
+    await setShortlinkConfig({ provider: provider.toLowerCase(), apiKey, apiUrl });
+    await tgSendText(msg.chat.id, `✅ Shortlink updated: <b>${provider}</b>`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🎨 Settings Menu', callback_data: 'panel:s:settings' }]] }
+    });
+    return true;
+  }
+
+  if (action === 'search_vault') {
+    const results = await cbSearchFilesAll(rawText);
+    if (!results.length) {
+      await tgSendText(msg.chat.id, `❌ '${rawText}' ke liye Vault me koi file nahi mili.`);
+      return true;
+    }
+    const buttons = results.slice(0, 15).map(f => [{ text: f.fileName.length > 40 ? f.fileName.slice(0, 37) + '…' : f.fileName, callback_data: `get:F${f.id}` }]);
+    buttons.push([{ text: '🗄️ Vault Menu', callback_data: 'panel:s:vault' }]);
+    await tgSendText(msg.chat.id, `🔎 <b>${results.length} results mile '${rawText}' ke liye:</b>\nTap karo deliver karne ke liye:`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: buttons }
+    });
+    return true;
+  }
+
+  if (action === 'remove_file') {
+    const count = await cbDeleteFilesByName(rawText);
+    await tgSendText(msg.chat.id, count ? `🗑️ '${rawText}' se match hone wali <b>${count}</b> file(s) delete ho gayi.` : `❌ Koi file match nahi hui.`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🗄️ Vault Menu', callback_data: 'panel:s:vault' }]] }
+    });
+    return true;
+  }
+
+  return false;
+}
+
 app.post('/api/telegram/webhook', async (req, res) => {
   res.sendStatus(200); // ack immediately — Telegram needs a fast response
   try {
@@ -1363,6 +2138,18 @@ app.post('/api/telegram/webhook', async (req, res) => {
       const messageId = cb.message.message_id;
       const userId = cb.from.id;
       const isAdmin = await checkIsAdmin(userId);
+
+      if (cb.data.startsWith('panel:')) {
+        if (!isAdmin) {
+          fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ callback_query_id: cb.id, text: '❌ Admins only.', show_alert: true })
+          }).catch(() => {});
+          return;
+        }
+        await handlePanelCallback(cb);
+        return;
+      }
 
       if (cb.data === 'menu') {
         const text = await buildWelcomeText(userId);
@@ -1475,8 +2262,19 @@ app.post('/api/telegram/webhook', async (req, res) => {
       const userId = msg.from.id;
       const isAdmin = await checkIsAdmin(userId);
 
+      // ---- Check pending panel inputs (image upload, broadcast text, etc.) ----
+      if (isAdmin && await handlePanelPendingInput(msg)) return;
+
       // ---- Owner/admin-only bot commands: shortlink provider + free-pass ----
       if (isAdmin && msg.text && await handleOwnerCommand(msg.text.trim(), userId)) return;
+
+      // ---- /panel interactive control panel ----
+      if (isAdmin && msg.text && /^\/panel(@\S+)?(\s|$)/i.test(msg.text.trim())) {
+        panelPending.delete(userId);
+        const isOwner = cbOwnerIds().includes(String(userId));
+        await tgSend(userId, panelHomeText(msg.from.first_name, isOwner), panelHomeKeyboard(isOwner), 'HTML');
+        return;
+      }
 
       // ---- Direct slash-command shortcuts for the same cards the menu buttons show ----
       const cmd = msg.text ? msg.text.trim().toLowerCase() : '';

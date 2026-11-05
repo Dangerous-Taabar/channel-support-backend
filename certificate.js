@@ -20,7 +20,7 @@ GlobalFonts.registerFromPath(path.join(ASSETS, 'fonts', 'FreeSerifBold.ttf'), 'C
 const DISPLAY = '"CertDisplay", "CertFallback", serif';
 const TEXT = '"CertText", "CertFallback", serif';
 
-// ---- Layout (pixel positions on the 1672x941 templates) ----------------------
+// ---- Layout (pixel positions on the templates) ----------------------
 const LAYOUT = {
   gold: {
     nameCx: 836, nameBase: 475, nameSize: 85, nameMaxW: 700,
@@ -47,6 +47,62 @@ const LAYOUT = {
     glow: 'rgba(70,160,255,0.9)', edge: 'rgba(255,255,255,0.55)', small_color: '#bfe0ff',
   },
 };
+
+function getLayoutForImage(tier, width, height) {
+  // If template is the 1024x576 Diwali / Festival edition
+  if (width === 1024 && height === 576) {
+    const base = LAYOUT[tier] || LAYOUT.gold;
+    return {
+      isDiwali: true,
+      nameCx: 512, nameBase: 242, nameSize: 44, nameMaxW: 460,
+      days:   { cx: 258, base: 326, size: 38, maxW: 76 },
+      streak: { cx: 512, base: 326, size: 38, maxW: 76 },
+      stops: base.stops,
+      glow: base.glow,
+      edge: base.edge,
+      small_color: base.small_color
+    };
+  }
+
+  // Classic template layout (scaled dynamically to actual image width/height)
+  const base = LAYOUT[tier] || LAYOUT.gold;
+  const scaleX = width / 1672;
+  const scaleY = height / 941;
+
+  return {
+    nameCx: Math.round(base.nameCx * scaleX),
+    nameBase: Math.round(base.nameBase * scaleY),
+    nameSize: Math.round(base.nameSize * scaleY),
+    nameMaxW: Math.round(base.nameMaxW * scaleX),
+    days: {
+      cx: Math.round(base.days.cx * scaleX),
+      base: Math.round(base.days.base * scaleY),
+      size: Math.round(base.days.size * scaleY),
+      maxW: Math.round(base.days.maxW * scaleX),
+    },
+    streak: {
+      cx: Math.round(base.streak.cx * scaleX),
+      base: Math.round(base.streak.base * scaleY),
+      size: Math.round(base.streak.size * scaleY),
+      maxW: Math.round(base.streak.maxW * scaleX),
+    },
+    date: {
+      x: Math.round(base.date.x * scaleX),
+      base: Math.round(base.date.base * scaleY),
+      maxW: Math.round(base.date.maxW * scaleX),
+    },
+    cid: {
+      x: Math.round(base.cid.x * scaleX),
+      base: Math.round(base.cid.base * scaleY),
+      maxW: Math.round(base.cid.maxW * scaleX),
+    },
+    small: Math.round(base.small * scaleY),
+    stops: base.stops,
+    glow: base.glow,
+    edge: base.edge,
+    small_color: base.small_color,
+  };
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const templates = new Map();
@@ -115,8 +171,8 @@ async function renderCertificate(opts) {
   const totalDays = Math.max(0, parseInt(opts.totalDays, 10) || 0);
   const streak = Math.max(0, parseInt(opts.streak, 10) || 0);
   const tier = LAYOUT[opts.tier] ? opts.tier : tierForDays(totalDays);
-  const L = LAYOUT[tier];
   const img = await getTemplate(tier);
+  const L = getLayoutForImage(tier, img.width, img.height);
   const canvas = createCanvas(img.width, img.height);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
@@ -124,8 +180,10 @@ async function renderCertificate(opts) {
   metalText(ctx, cleanName(opts.name), L.nameCx, L.nameBase, L.nameSize, L.nameMaxW, L);
   metalText(ctx, String(totalDays), L.days.cx, L.days.base, L.days.size, L.days.maxW, L);
   metalText(ctx, String(streak), L.streak.cx, L.streak.base, L.streak.size, L.streak.maxW, L);
-  smallText(ctx, 'Issued: ' + istDateStr(opts.issuedAt), L.date.x, L.date.base, L.small, L.date.maxW, L.small_color);
-  smallText(ctx, 'Certificate ID: ' + certId(opts.rawName != null ? opts.rawName : opts.name, totalDays, opts.firstSupportAt), L.cid.x, L.cid.base, L.small, L.cid.maxW, L.small_color);
+  if (!L.isDiwali && L.date) {
+    smallText(ctx, 'Issued: ' + istDateStr(opts.issuedAt), L.date.x, L.date.base, L.small, L.date.maxW, L.small_color);
+    smallText(ctx, 'Certificate ID: ' + certId(opts.rawName != null ? opts.rawName : opts.name, totalDays, opts.firstSupportAt), L.cid.x, L.cid.base, L.small, L.cid.maxW, L.small_color);
+  }
 
   return opts.format === 'png' ? canvas.encode('png') : canvas.encode('jpeg', 94);
 }

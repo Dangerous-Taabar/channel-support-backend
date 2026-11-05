@@ -1406,6 +1406,7 @@ const _PANEL_SECTIONS = {
       [{ label: '🧪 Test Silver', kind: 'do', action: 'test_cert:silver' }, { label: '📤 Update Silver', kind: 'ask', action: 'upload_cert:silver' }],
       [{ label: '🧪 Test Gold', kind: 'do', action: 'test_cert:gold' }, { label: '📤 Update Gold', kind: 'ask', action: 'upload_cert:gold' }],
       [{ label: '🧪 Test Platinum', kind: 'do', action: 'test_cert:platinum' }, { label: '📤 Update Platinum', kind: 'ask', action: 'upload_cert:platinum' }],
+      [{ label: '♻️ Restore Default Cards', kind: 'do', action: 'restore_default_certs' }],
     ]
   },
   stats: {
@@ -1633,6 +1634,28 @@ async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
       });
     } catch (e) {
       await tgSendText(chatId, `❌ Certificate generate nahi ho paya: ${e.message}`);
+    }
+    return;
+  }
+
+  if (action === 'restore_default_certs') {
+    const defaultDir = path.join(__dirname, 'assets', 'cert', 'defaults');
+    const targetDir = path.join(__dirname, 'assets', 'cert');
+    if (fs.existsSync(defaultDir)) {
+      for (const t of ['silver', 'gold', 'platinum']) {
+        const src = path.join(defaultDir, t + '.png');
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, path.join(targetDir, t + '.png'));
+          clearTemplateCache(t);
+        }
+      }
+      _certCache.clear();
+      await tgSendText(chatId, `✅ <b>Default Templates Restored!</b>\n\nOriginal Silver, Gold aur Platinum card templates wapas restore ho gaye hain.`, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }]] }
+      });
+    } else {
+      await tgSendText(chatId, `⚠️ Defaults backup folder nahi mila.`);
     }
     return;
   }

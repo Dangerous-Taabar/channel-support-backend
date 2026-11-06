@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-const { renderCertificate, tierForDays, clearTemplateCache } = require('./certificate');
+const { renderCertificate, tierForDays, clearTemplateCache, setProviders: setCertProviders, templateInfo, prepareTemplate, defaultLayout } = require('./certificate');
 
 const app = express();
 app.use(express.json({ limit: '5mb' })); // logos / branding images only (animated card clips were removed)
@@ -959,11 +959,23 @@ function tgSend(chatId, text, replyMarkup, parseMode) {
   }).catch(() => {});
 }
 
-function tgEdit(chatId, messageId, text, replyMarkup, parseMode) {
-  return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup, parse_mode: parseMode })
-  }).catch(() => {});
+// Edits a message in place. Certificate previews are PHOTO messages, and Telegram refuses editMessageText on those
+// ("there is no text in the message to edit") — that is exactly why the Back / Cards Menu / Panel Home buttons under
+// a certificate preview did nothing. In that case the photo is replaced by a fresh text message instead.
+async function tgEdit(chatId, messageId, text, replyMarkup, parseMode) {
+  const post = (method, body) => fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  }).then(r => r.json()).catch(() => null);
+  const r = await post('editMessageText', { chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup, parse_mode: parseMode });
+  if (r && r.ok) return r;
+  const desc = (r && r.description) || '';
+  if (/not modified/i.test(desc)) return r; // same content tapped twice — nothing to do
+  if (/no text in the message|message to edit not found|message can't be edited/i.test(desc)) {
+    tgDeleteMsgIn(chatId, messageId);
+    return post('sendMessage', { chat_id: chatId, text, reply_markup: replyMarkup, parse_mode: parseMode });
+  }
+  if (desc) console.error('[tgEdit] failed:', desc);
+  return r;
 }
 
 // Telegram HTML parse_mode only understands a handful of tags — anything a
@@ -1400,13 +1412,11 @@ function panelPromptText(title, instruction) {
 const _PANEL_SECTIONS = {
   cert: {
     title: '🎖️ CERTIFICATES (CARDS)',
-    sub: 'Silver, Gold & Platinum card templates & preview',
+    sub: 'Silver, Gold & Platinum cards — upload from here, no site visit needed',
     ownerOnly: false,
     buttons: [
-      [{ label: '🧪 Test Silver', kind: 'do', action: 'test_cert:silver' }, { label: '📤 Update Silver', kind: 'ask', action: 'upload_cert:silver' }],
-      [{ label: '🧪 Test Gold', kind: 'do', action: 'test_cert:gold' }, { label: '📤 Update Gold', kind: 'ask', action: 'upload_cert:gold' }],
-      [{ label: '🧪 Test Platinum', kind: 'do', action: 'test_cert:platinum' }, { label: '📤 Update Platinum', kind: 'ask', action: 'upload_cert:platinum' }],
-      [{ label: '♻️ Restore Default Cards', kind: 'do', action: 'restore_default_certs' }],
+      [{ label: '🥈 Silver', kind: 's', action: 'cert_silver' }, { label: '🥇 Gold', kind: 's', action: 'cert_gold' }, { label: '💎 Platinum', kind: 's', action: 'cert_platinum' }],
+      [{ label: 'ℹ️ Cards Status', kind: 'do', action: 'cert_status' }, { label: '♻️ Restore Default Cards', kind: 'do', action: 'restore_default_certs' }],
     ]
   },
   stats: {
@@ -1466,6 +1476,21 @@ const _PANEL_SECTIONS = {
   }
 };
 
+for (const t of ['silver', 'gold', 'platinum']) {
+  const m = { silver: ['🥈', 'Silver'], gold: ['🥇', 'Gold'], platinum: ['💎', 'Platinum'] }[t];
+  _PANEL_SECTIONS['cert_' + t] = {
+    title: `${m[0]} ${m[1].toUpperCase()} CARD`,
+    sub: 'Template, text position & live preview',
+    ownerOnly: false,
+    back: 'cert',
+    buttons: [
+      [{ label: `🧪 Test ${m[1]}`, kind: 'do', action: `test_cert:${t}` }, { label: '📤 Update Template', kind: 'ask', action: `upload_cert:${t}` }],
+      [{ label: '📐 Adjust Text Position', kind: 'lay', action: `${t}:name:sel:1` }],
+      [{ label: '↩️ Undo Last Update', kind: 'do', action: `cert_undo:${t}` }],
+    ]
+  };
+}
+
 const _PANEL_HOME_ORDER = [
   ['cert', 'stats'],
   ['broadcast', 'access'],
@@ -1499,7 +1524,9 @@ function panelSectionKeyboard(sectionKey) {
       })));
     }
   }
-  rows.push([{ text: '⬅️ Back to Panel', callback_data: 'panel:home' }]);
+  rows.push([sec && sec.back
+    ? { text: '⬅️ Back to Cards', callback_data: `panel:s:${sec.back}` }
+    : { text: '⬅️ Back to Panel', callback_data: 'panel:home' }]);
   return { inline_keyboard: rows };
 }
 
@@ -1514,18 +1541,18 @@ function panelPromptKeyboard(sectionKey) {
 const _PANEL_ASK = {
   'upload_cert:silver': {
     title: 'UPLOAD SILVER CARD',
-    instruction: 'Naye <b>Silver Certificate Card</b> ki template image (photo ya file) bhejo.\n\nRecommended: 1672x941 PNG/JPG without name/numbers.\nBot apne aap template save karke preview dikhayega.',
-    section: 'cert'
+    instruction: 'Naye <b>Silver Certificate</b> ki blank template image bhejo (naam/numbers ke bina).\n\n📎 <b>Best quality:</b> image ko <b>File / Document</b> ki tarah bhejo (📎 → File). Photo ki tarah bhejoge to Telegram compress kar dega — phir bhi chalega.\n📐 16:9 image best hai (jaise 1672×941 ya 1024×576).\nBot template save karke live preview dikhayega; text sahi jagah na ho to wahin se adjust kar sakte ho.',
+    section: 'cert_silver'
   },
   'upload_cert:gold': {
     title: 'UPLOAD GOLD CARD',
-    instruction: 'Naye <b>Gold Certificate Card</b> ki template image (photo ya file) bhejo.\n\nRecommended: 1672x941 PNG/JPG without name/numbers.\nBot apne aap template save karke preview dikhayega.',
-    section: 'cert'
+    instruction: 'Naye <b>Gold Certificate</b> ki blank template image bhejo (naam/numbers ke bina).\n\n📎 <b>Best quality:</b> image ko <b>File / Document</b> ki tarah bhejo (📎 → File). Photo ki tarah bhejoge to Telegram compress kar dega — phir bhi chalega.\n📐 16:9 image best hai (jaise 1672×941 ya 1024×576).\nBot template save karke live preview dikhayega; text sahi jagah na ho to wahin se adjust kar sakte ho.',
+    section: 'cert_gold'
   },
   'upload_cert:platinum': {
     title: 'UPLOAD PLATINUM CARD',
-    instruction: 'Naye <b>Platinum Certificate Card</b> ki template image (photo ya file) bhejo.\n\nRecommended: 1672x941 PNG/JPG without name/numbers.\nBot apne aap template save karke preview dikhayega.',
-    section: 'cert'
+    instruction: 'Naye <b>Platinum Certificate</b> ki blank template image bhejo (naam/numbers ke bina).\n\n📎 <b>Best quality:</b> image ko <b>File / Document</b> ki tarah bhejo (📎 → File). Photo ki tarah bhejoge to Telegram compress kar dega — phir bhi chalega.\n📐 16:9 image best hai (jaise 1672×941 ya 1024×576).\nBot template save karke live preview dikhayega; text sahi jagah na ho to wahin se adjust kar sakte ho.',
+    section: 'cert_platinum'
   },
   'broadcast': {
     title: 'NEW BROADCAST',
@@ -1594,68 +1621,227 @@ async function downloadTelegramFile(fileId) {
   return await res.buffer();
 }
 
-async function saveCertificateTemplate(tier, imageBuffer) {
-  // 1. Channel_Support_Bot assets/cert
-  const localDir = path.join(__dirname, 'assets', 'cert');
-  if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
-  fs.writeFileSync(path.join(localDir, tier + '.png'), imageBuffer);
+// ---------------------------------------------------------------------------
+// CERTIFICATE TEMPLATE STORE — templates + text layouts live in Redis, NOT on Render's disk
+// (Render wipes the disk on every deploy/restart, which is why a template updated from the bot used to
+// silently revert). Packaged files in assets/cert/ stay as the fallback.
+//   certtpl:<tier>        base64 JPEG of the live template      certlayout:<tier>       JSON text layout (fractions)
+//   certtpl_prev:<tier>   previous template (for Undo)          certlayout_prev:<tier>  previous layout
+// ---------------------------------------------------------------------------
+const CERT_TIERS = ['silver', 'gold', 'platinum'];
+const CERT_META = {
+  silver:   { icon: '🥈', label: 'Silver',   test: { days: 12, streak: 7 } },
+  gold:     { icon: '🥇', label: 'Gold',     test: { days: 35, streak: 14 } },
+  platinum: { icon: '💎', label: 'Platinum', test: { days: 85, streak: 25 } },
+};
+async function certGetStoredTemplate(tier) {
+  const b64 = await redisCommand(['GET', 'certtpl:' + tier]);
+  return b64 ? Buffer.from(b64, 'base64') : null;
+}
+async function certGetStoredLayout(tier) {
+  const raw = await redisCommand(['GET', 'certlayout:' + tier]);
+  return raw ? JSON.parse(raw) : null;
+}
+setCertProviders({ loadTemplate: certGetStoredTemplate, loadLayout: certGetStoredLayout });
 
-  // 2. support-site assets/cert if exists on computer
-  const altDir = path.resolve('C:/Users/visha/Downloads/support-site/assets/cert');
-  if (fs.existsSync(altDir)) {
-    try {
-      fs.writeFileSync(path.join(altDir, tier + '.png'), imageBuffer);
-    } catch (e) {
-      console.warn('support-site cert sync skipped:', e.message);
+function certCachesClear(tier) { clearTemplateCache(tier); _certCache.clear(); }
+
+async function currentTemplateBuffer(tier) { // what is live right now: Redis override, else the packaged file
+  try { const st = await certGetStoredTemplate(tier); if (st) return st; } catch (e) {}
+  const f = path.join(__dirname, 'assets', 'cert', tier + '.png');
+  return fs.existsSync(f) ? fs.readFileSync(f) : null;
+}
+
+// Saves a new template. If you had hand-tuned the text positions, the new template keeps them (so swapping in a same-style
+// festival card needs no re-calibration); otherwise the right preset is chosen from the new image. Throws (and saves nothing as "success") if Redis rejects it.
+async function saveCertificateTemplate(tier, imageBuffer) {
+  const prep = await prepareTemplate(imageBuffer);          // decode + Redis-safe JPEG
+  let layoutNow = null, keepLayout = false;
+  try {
+    const info = await templateInfo(tier);
+    layoutNow = info.layout;                                   // kept for Undo
+    keepLayout = info.layoutSource === 'custom';               // only a hand-tuned layout is carried over to the new image
+    const prevBuf = await currentTemplateBuffer(tier);
+    if (prevBuf) {
+      const small = prevBuf.length <= 640 * 1024 ? prevBuf : (await prepareTemplate(prevBuf)).buffer;
+      await redisCommand(['SET', 'certtpl_prev:' + tier, small.toString('base64')]);
+      await redisCommand(['SET', 'certlayout_prev:' + tier, JSON.stringify(layoutNow)]);
     }
+  } catch (e) { console.warn('[cert] could not keep previous version for undo:', e.message); }
+  await redisCommand(['SET', 'certtpl:' + tier, prep.buffer.toString('base64')]);
+  if (layoutNow && keepLayout) await redisCommand(['SET', 'certlayout:' + tier, JSON.stringify(layoutNow)]);
+  else await redisCommand(['DEL', 'certlayout:' + tier]);  // untouched preset -> pick the right style for the NEW image size
+  certCachesClear(tier);
+  return prep;
+}
+
+async function undoCertificateTemplate(tier) {
+  const prev = await redisCommand(['GET', 'certtpl_prev:' + tier]);
+  if (!prev) return false;
+  const prevLayout = await redisCommand(['GET', 'certlayout_prev:' + tier]);
+  const cur = await redisCommand(['GET', 'certtpl:' + tier]);
+  const curLayout = await redisCommand(['GET', 'certlayout:' + tier]);
+  await redisCommand(['SET', 'certtpl:' + tier, prev]);                       // swap, so pressing Undo again = Redo
+  if (prevLayout) await redisCommand(['SET', 'certlayout:' + tier, prevLayout]); else await redisCommand(['DEL', 'certlayout:' + tier]);
+  if (cur) await redisCommand(['SET', 'certtpl_prev:' + tier, cur]); else await redisCommand(['DEL', 'certtpl_prev:' + tier]);
+  if (curLayout) await redisCommand(['SET', 'certlayout_prev:' + tier, curLayout]); else await redisCommand(['DEL', 'certlayout_prev:' + tier]);
+  certCachesClear(tier);
+  return true;
+}
+
+async function restoreDefaultCertificates() {
+  const dir = path.join(__dirname, 'assets', 'cert', 'defaults');
+  const done = [];
+  for (const t of CERT_TIERS) {
+    const f = path.join(dir, t + '.png');
+    if (!fs.existsSync(f)) continue;
+    const prep = await prepareTemplate(fs.readFileSync(f));
+    await redisCommand(['SET', 'certtpl:' + t, prep.buffer.toString('base64')]);
+    await redisCommand(['DEL', 'certlayout:' + t]);
+    done.push(t);
+  }
+  certCachesClear();
+  return done;
+}
+
+async function certPreviewName(fromUser) {
+  return [fromUser && fromUser.first_name, fromUser && fromUser.last_name].filter(Boolean).join(' ') || 'Admin Supporter';
+}
+async function sendCardPreview(chatId, tier, fromUser, caption, keyboard, highlight) {
+  const t = CERT_META[tier].test;
+  const img = await renderCertificate({ name: await certPreviewName(fromUser), totalDays: t.days, streak: t.streak, tier, issuedAt: Date.now(), highlight });
+  return sendCertificatePhoto(chatId, img, caption, keyboard);
+}
+function certLayoutLabel(info) { return (info.preset === 'festival' ? 'Festival' : 'Classic') + (info.layoutSource === 'custom' ? ' (custom)' : ''); }
+async function certTierStatusLine(tier) {
+  try {
+    const i = await templateInfo(tier);
+    return `${CERT_META[tier].icon} <b>${CERT_META[tier].label}</b> — <code>${i.width}×${i.height}</code> · ${i.source === 'bot' ? 'bot upload' : 'default file'} · layout: ${certLayoutLabel(i)}`;
+  } catch (e) { return `${CERT_META[tier].icon} <b>${CERT_META[tier].label}</b> — ❌ template nahi mila (${esc(e.message)})`; }
+}
+
+// ---- "Adjust text position" screen (one photo message, edited in place on every tap) ----
+const LAY_FIELDS = { name: '👤 Name', days: '📅 Days', streak: '🔥 Streak' };
+function layKeyboard(tier, field, step) {
+  const d = (f, op, st) => `panel:lay:${tier}:${f}:${op}:${st}`;
+  return { inline_keyboard: [
+    Object.keys(LAY_FIELDS).map(f => ({ text: (f === field ? '• ' : '') + LAY_FIELDS[f], callback_data: d(f, 'sel', step) })),
+    [{ text: '⬅️', callback_data: d(field, 'l', step) }, { text: '⬆️', callback_data: d(field, 'u', step) }, { text: '⬇️', callback_data: d(field, 'd', step) }, { text: '➡️', callback_data: d(field, 'r', step) }],
+    [{ text: '➖ Size', callback_data: d(field, 'm', step) }, { text: '➕ Size', callback_data: d(field, 'p', step) }, { text: step ? '🔍 Switch to Fine' : '📏 Switch to Coarse', callback_data: d(field, 'sel', step ? 0 : 1) }],
+    [{ text: '🔄 Reset', callback_data: d(field, 'reset', step) }, { text: '🎆 Festival', callback_data: d(field, 'fest', step) }, { text: '🏛 Classic', callback_data: d(field, 'classic', step) }],
+    [{ text: '✅ Done', callback_data: `panel:s:cert_${tier}` }],
+  ] };
+}
+function layCaption(tier, field, step, lay) {
+  const f = lay[field];
+  return [
+    `📐 <b>ADJUST TEXT — ${CERT_META[tier].label.toUpperCase()}</b>`,
+    `Selected: <b>${LAY_FIELDS[field]}</b>  ·  Step: <b>${step ? 'Coarse' : 'Fine'}</b>`,
+    `x <code>${(f.cx * 100).toFixed(1)}%</code> · y <code>${(f.base * 100).toFixed(1)}%</code> · size <code>${(f.size * 100).toFixed(1)}%</code>`,
+    '',
+    '<i>Arrows se cyan box ko sahi jagah le jao, ➕/➖ se size badlo. Done dabane par guide box hat jayega.</i>',
+  ].join('\n');
+}
+async function tgEditPhoto(chatId, messageId, buffer, caption, replyMarkup) {
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('message_id', String(messageId));
+  form.append('media', JSON.stringify({ type: 'photo', media: 'attach://pic', caption, parse_mode: 'HTML' }));
+  form.append('reply_markup', JSON.stringify(replyMarkup));
+  form.append('pic', buffer, { filename: 'certificate.jpg', contentType: 'image/jpeg' });
+  const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageMedia`, { method: 'POST', body: form, headers: form.getHeaders() });
+  return r.json();
+}
+async function handleLayoutCallback(cb, arg) {
+  const [tier, field0, op, stepStr] = String(arg).split(':');
+  if (!CERT_TIERS.includes(tier)) return;
+  const field = LAY_FIELDS[field0] ? field0 : 'name';
+  const step = stepStr === '0' ? 0 : 1;
+  const chatId = cb.message.chat.id, messageId = cb.message.message_id;
+
+  const info = await templateInfo(tier);
+  let lay = JSON.parse(JSON.stringify(info.layout));
+  const mv = step ? 0.01 : 0.002, P = lay[field];
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  if (op === 'l') P.cx = clamp(P.cx - mv, 0, 1);
+  else if (op === 'r') P.cx = clamp(P.cx + mv, 0, 1);
+  else if (op === 'u') P.base = clamp(P.base - mv, 0, 1);
+  else if (op === 'd') P.base = clamp(P.base + mv, 0, 1);
+  else if (op === 'p') P.size = clamp(P.size * (step ? 1.06 : 1.015), 0.02, 0.25);
+  else if (op === 'm') P.size = clamp(P.size / (step ? 1.06 : 1.015), 0.02, 0.25);
+  else if (op === 'reset') lay = defaultLayout(tier, lay.preset === 'festival' ? 'festival' : 'classic');
+  else if (op === 'fest') lay = defaultLayout(tier, 'festival');
+  else if (op === 'classic') lay = defaultLayout(tier, 'classic');
+  if (['l', 'r', 'u', 'd', 'p', 'm', 'reset', 'fest', 'classic'].includes(op)) {
+    for (const k of ['name', 'days', 'streak']) for (const q of ['cx', 'base', 'size', 'maxW']) lay[k][q] = Math.round(lay[k][q] * 100000) / 100000;
+    await redisCommand(['SET', 'certlayout:' + tier, JSON.stringify(lay)]);
+    certCachesClear(tier);
   }
 
-  // 3. Clear canvas & buffer cache
-  clearTemplateCache(tier);
-  _certCache.clear();
+  const t = CERT_META[tier].test;
+  const img = await renderCertificate({ name: await certPreviewName(cb.from), totalDays: t.days, streak: t.streak, tier, issuedAt: Date.now(), highlight: field });
+  const caption = layCaption(tier, field, step, lay), kb = layKeyboard(tier, field, step);
+  if (cb.message.photo) {
+    const r = await tgEditPhoto(chatId, messageId, img, caption, kb).catch(() => null);
+    if (r && (r.ok || /not modified/i.test(r.description || ''))) return;
+    tgDeleteMsgIn(chatId, messageId); // edit refused for another reason -> replace with a fresh photo
+    await sendCertificatePhoto(chatId, img, caption, kb);
+  } else {
+    await sendCertificatePhoto(chatId, img, caption, kb); // opened from a text menu: show the photo, drop the menu
+    tgDeleteMsgIn(chatId, messageId);
+  }
 }
 
 async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
   if (action.startsWith('test_cert:')) {
     const tier = action.split(':')[1];
-    const name = [fromUser.first_name, fromUser.last_name].filter(Boolean).join(' ') || 'Admin Supporter';
+    if (!CERT_TIERS.includes(tier)) return;
     try {
-      const testDays = tier === 'platinum' ? 85 : tier === 'gold' ? 35 : 12;
-      const testStreak = tier === 'platinum' ? 25 : tier === 'gold' ? 14 : 7;
-      const img = await renderCertificate({
-        name,
-        totalDays: testDays,
-        streak: testStreak,
-        tier,
-        issuedAt: Date.now()
-      });
-      await sendCertificatePhoto(chatId, img, `🧪 <b>Live Certificate Preview — ${tier.toUpperCase()} Card</b>\n\nTemplate render test OK! Supporters ke support karne par isi design me text render hoga.`, {
-        inline_keyboard: [[{ text: '⬅️ Back to Cards', callback_data: 'panel:s:cert' }]]
-      });
+      await sendCardPreview(chatId, tier, fromUser,
+        `🧪 <b>Live Certificate Preview — ${tier.toUpperCase()} Card</b>\n\nTemplate render test OK! Supporters ke support karne par isi design me text render hoga.`,
+        { inline_keyboard: [[{ text: '📐 Adjust Text', callback_data: `panel:lay:${tier}:name:sel:1` }], [{ text: '⬅️ Back to Card', callback_data: `panel:s:cert_${tier}` }]] });
     } catch (e) {
-      await tgSendText(chatId, `❌ Certificate generate nahi ho paya: ${e.message}`);
+      await tgSendText(chatId, `❌ Certificate generate nahi ho paya: ${esc(e.message)}`, { parse_mode: 'HTML' });
+    }
+    return;
+  }
+
+  if (action === 'cert_status') {
+    const lines = [panelHeader('ℹ️', 'CARDS STATUS', 'Live template + layout of every tier')];
+    for (const t of CERT_TIERS) lines.push(await certTierStatusLine(t));
+    lines.push('', '<i>Bot upload = Redis me saved (Render restart se safe). Default file = GitHub wali original.</i>');
+    await tgEdit(chatId, messageId, lines.join('\n'), { inline_keyboard: [[{ text: '⬅️ Back to Cards', callback_data: 'panel:s:cert' }]] }, 'HTML');
+    return;
+  }
+
+  if (action.startsWith('cert_undo:')) {
+    const tier = action.split(':')[1];
+    if (!CERT_TIERS.includes(tier)) return;
+    let ok = false;
+    try { ok = await undoCertificateTemplate(tier); } catch (e) { console.error('[cert] undo failed:', e.message); }
+    if (!ok) {
+      await tgEdit(chatId, messageId, `⚠️ <b>${CERT_META[tier].label}</b> ke liye koi purana template saved nahi hai.\n\n<i>Pehli baar template update karne ke baad hi Undo kaam karta hai.</i>`,
+        { inline_keyboard: [[{ text: '⬅️ Back to Card', callback_data: `panel:s:cert_${tier}` }]] }, 'HTML');
+      return;
+    }
+    try {
+      await sendCardPreview(chatId, tier, fromUser, `↩️ <b>${CERT_META[tier].label} template wapas purane par aa gaya.</b>\n\nPhir se Undo dabane par naya wala wapas aa jayega.`,
+        { inline_keyboard: [[{ text: '↩️ Undo / Redo', callback_data: `panel:do:cert_undo:${tier}` }], [{ text: '⬅️ Back to Card', callback_data: `panel:s:cert_${tier}` }]] });
+      tgDeleteMsgIn(chatId, messageId);
+    } catch (e) {
+      await tgSendText(chatId, `✅ Undo ho gaya, par preview nahi ban paya: ${esc(e.message)}`, { parse_mode: 'HTML' });
     }
     return;
   }
 
   if (action === 'restore_default_certs') {
-    const defaultDir = path.join(__dirname, 'assets', 'cert', 'defaults');
-    const targetDir = path.join(__dirname, 'assets', 'cert');
-    if (fs.existsSync(defaultDir)) {
-      for (const t of ['silver', 'gold', 'platinum']) {
-        const src = path.join(defaultDir, t + '.png');
-        if (fs.existsSync(src)) {
-          fs.copyFileSync(src, path.join(targetDir, t + '.png'));
-          clearTemplateCache(t);
-        }
-      }
-      _certCache.clear();
-      await tgSendText(chatId, `✅ <b>Default Templates Restored!</b>\n\nOriginal Silver, Gold aur Platinum card templates wapas restore ho gaye hain.`, {
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }]] }
-      });
+    let done = [];
+    try { done = await restoreDefaultCertificates(); } catch (e) { console.error('[cert] restore failed:', e.message); }
+    if (done.length) {
+      await tgEdit(chatId, messageId, `✅ <b>Default Templates Restored!</b>\n\nOriginal ${done.map(t => CERT_META[t].label).join(', ')} card templates wapas restore ho gaye hain (text layout bhi default).`,
+        { inline_keyboard: [[{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }]] }, 'HTML');
     } else {
-      await tgSendText(chatId, `⚠️ Defaults backup folder nahi mila.`);
+      await tgEdit(chatId, messageId, '⚠️ Defaults backup folder nahi mila ya restore fail hua.', { inline_keyboard: [[{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }]] });
     }
     return;
   }
@@ -1834,7 +2020,16 @@ async function handlePanelCallback(cb) {
       }).catch(() => {});
       return;
     }
-    await tgEdit(chatId, messageId, panelSectionText(sec.title, sec.sub), panelSectionKeyboard(action), 'HTML');
+    let text = panelSectionText(sec.title, sec.sub);
+    if (action.startsWith('cert_') && CERT_TIERS.includes(action.slice(5))) text = text.replace('\n👇 Ek action chuno:', '\n' + await certTierStatusLine(action.slice(5)) + '\n\n👇 Ek action chuno:');
+    await tgEdit(chatId, messageId, text, panelSectionKeyboard(action), 'HTML');
+    return;
+  }
+
+  if (kind === 'lay') {
+    panelPending.delete(userId);
+    try { await handleLayoutCallback(cb, action); }
+    catch (e) { console.error('[layout] failed:', e.message); await tgSendText(chatId, `❌ Layout update fail hua: ${esc(e.message)}`, { parse_mode: 'HTML' }); }
     return;
   }
 
@@ -1874,39 +2069,39 @@ async function handlePanelPendingInput(msg) {
   const action = pending.action;
   const isOwner = cbOwnerIds().includes(String(userId));
 
+  // A slash command (/panel, /start, ...) always cancels the waiting prompt instead of being swallowed as its answer.
+  if (typeof msg.text === 'string' && msg.text.trim().startsWith('/')) { panelPending.delete(userId); return false; }
+
   // Case 1: Certificate Template Upload
   if (action.startsWith('upload_cert:')) {
     const tier = action.split(':')[1];
-    const media = msg.photo ? msg.photo[msg.photo.length - 1] : (msg.document && /^image\//i.test(msg.document.mime_type || '') ? msg.document : null);
+    if (!CERT_TIERS.includes(tier)) { panelPending.delete(userId); return false; }
+    const doc = msg.document && (/^image\//i.test(msg.document.mime_type || '') || /\.(png|jpe?g|webp)$/i.test(msg.document.file_name || '')) ? msg.document : null;
+    const media = msg.photo ? msg.photo[msg.photo.length - 1] : doc;
     if (!media) {
-      await tgSendText(msg.chat.id, `⚠️ <b>Photo ya Image bhejo!</b>\n\nNaye ${tier.toUpperCase()} card ka template image attach karke bhejo.`, { parse_mode: 'HTML' });
+      await tgSendText(msg.chat.id, `⚠️ <b>Photo ya Image bhejo!</b>\n\nNaye ${tier.toUpperCase()} card ka template image attach karke bhejo.\n<i>Cancel karna ho to koi bhi /command (jaise /panel) bhej do.</i>`, { parse_mode: 'HTML' });
       return true;
     }
     panelPending.delete(userId);
     const waitMsg = await tgSendText(msg.chat.id, `⏳ <b>${tier.toUpperCase()} Card download & save ho raha hai...</b>`, { parse_mode: 'HTML' });
     try {
       const imgBuf = await downloadTelegramFile(media.file_id);
-      await saveCertificateTemplate(tier, imgBuf);
+      const prep = await saveCertificateTemplate(tier, imgBuf);
       if (waitMsg && waitMsg.result) tgDeleteMsgIn(msg.chat.id, waitMsg.result.message_id);
-
-      const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Admin Supporter';
-      const testDays = tier === 'platinum' ? 85 : tier === 'gold' ? 35 : 12;
-      const testStreak = tier === 'platinum' ? 25 : tier === 'gold' ? 14 : 7;
-      const testImg = await renderCertificate({
-        name,
-        totalDays: testDays,
-        streak: testStreak,
-        tier,
-        issuedAt: Date.now()
-      });
-      await sendCertificatePhoto(msg.chat.id, testImg, `✅ <b>${tier.toUpperCase()} Card Template Successfully Updated!</b>\n\nNaya template live save ho gaya hai. Ye raha iska live rendered preview 👆\nSite & bot dono jagah update ho gaya!`, {
-        inline_keyboard: [
-          [{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }],
-          [{ text: '🏠 Panel Home', callback_data: 'panel:home' }]
-        ]
-      });
+      const info = await templateInfo(tier);
+      const notes = [];
+      if (msg.photo) notes.push('ℹ️ Photo ki tarah bheji gayi, isliye Telegram ne compress kiya. Best quality ke liye agli baar <b>File/Document</b> ki tarah bhejo.');
+      if (Math.abs(prep.aspect - 16 / 9) > 0.06) notes.push('⚠️ Image 16:9 nahi hai — text thoda idhar-udhar ho sakta hai, 📐 Adjust Text se theek kar lo.');
+      await sendCardPreview(msg.chat.id, tier, msg.from,
+        `✅ <b>${tier.toUpperCase()} Card Template Updated!</b>\n\n📄 <code>${prep.width}×${prep.height}</code> · layout: <b>${certLayoutLabel(info)}</b>\nYe raha live rendered preview 👆 — site aur bot dono jagah ab yahi chalega (Render restart se bhi safe).\n\n<i>Text sahi jagah na ho to neeche se 🎆 Festival / 🏛 Classic style chuno ya 📐 Adjust Text karo.</i>` + (notes.length ? '\n\n' + notes.join('\n') : ''),
+        { inline_keyboard: [
+          [{ text: '📐 Adjust Text', callback_data: `panel:lay:${tier}:name:sel:1` }, { text: '↩️ Undo', callback_data: `panel:do:cert_undo:${tier}` }],
+          [{ text: '🎆 Festival style', callback_data: `panel:lay:${tier}:name:fest:1` }, { text: '🏛 Classic style', callback_data: `panel:lay:${tier}:name:classic:1` }],
+          [{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }, { text: '🏠 Panel Home', callback_data: 'panel:home' }]
+        ] });
     } catch (err) {
-      await tgSendText(msg.chat.id, `❌ Template update fail hua: ${err.message}`);
+      if (waitMsg && waitMsg.result) tgDeleteMsgIn(msg.chat.id, waitMsg.result.message_id);
+      await tgSendText(msg.chat.id, `❌ Template update fail hua: ${esc(err.message)}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎖️ Cards Menu', callback_data: 'panel:s:cert' }]] } });
     }
     return true;
   }
@@ -1922,7 +2117,8 @@ async function handlePanelPendingInput(msg) {
     await tgSendText(msg.chat.id, `📢 Broadcast bhej raha hu ${userIds.length} users ko...`, { parse_mode: 'HTML' });
     for (const uid of userIds) {
       try {
-        const r = await tgSendText(uid, rawText, { parse_mode: 'HTML' });
+        let r = await tgSendText(uid, rawText, { parse_mode: 'HTML' });
+        if (r && !r.ok && /parse entities|unsupported start tag|can't find end/i.test(r.description || '')) r = await tgSendText(uid, rawText); // not valid HTML -> send as plain text
         if (r && r.ok) sent++;
         else failed++;
       } catch (e) { failed++; }
@@ -2047,6 +2243,7 @@ async function handlePanelPendingInput(msg) {
       return true;
     }
     await cbAddAdmin(rawText);
+    setAdminCommands(rawText, true).catch(() => {});
     await tgSendText(msg.chat.id, `✅ User ID <code>${rawText}</code> ko admin bana diya gaya!`, {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: '👥 Admin List', callback_data: 'panel:do:admin_list' }]] }
@@ -2064,6 +2261,7 @@ async function handlePanelPendingInput(msg) {
       return true;
     }
     await cbRemoveAdmin(rawText);
+    setAdminCommands(rawText, false).catch(() => {});
     await tgSendText(msg.chat.id, `🗑️ User ID <code>${rawText}</code> ki admin power hata di gayi.`, {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: '👥 Admin List', callback_data: 'panel:do:admin_list' }]] }
@@ -3053,7 +3251,7 @@ app.post('/api/notify/support', async (req, res) => {
   const certName = (rec && rec.name) || name || 'Supporter';
   const d = (rec && rec.totalDays) || totalDays || 1;
   const s = (rec && rec.streak) || streak || 1;
-  const who = username ? '@' + username : (certName || 'Someone');
+  const who = esc(username ? '@' + username : (certName || 'Someone'));
   const userXp = xp || (d * 100);
 
   // Duplicate guard: one post per supporter per total-days value (retried if Telegram failed).
@@ -3144,4 +3342,41 @@ app.post('/api/notify/support', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Support backend listening on port ${PORT}`));
+// ---------------------------------------------------------------------------
+// "/" COMMAND MENU (like the Forward Bot): everyone sees the user commands, admins/owners also get /panel.
+// Best-effort: an admin who never opened the bot yet simply gets it after their first /start + next restart.
+// ---------------------------------------------------------------------------
+const BOT_USER_COMMANDS = [
+  { command: 'start', description: '🏠 Main menu' },
+  { command: 'mystatus', description: '📊 My support stats' },
+  { command: 'top10', description: '🏆 Leaderboard' },
+  { command: 'check', description: '🔍 Check my support' },
+];
+async function tgApiPost(method, body) {
+  return fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  }).then(r => r.json()).catch(() => null);
+}
+async function setAdminCommands(userId, isAdmin) {
+  if (!process.env.TELEGRAM_BOT_TOKEN || !/^\d+$/.test(String(userId))) return;
+  const scope = { type: 'chat', chat_id: Number(userId) };
+  if (isAdmin) await tgApiPost('setMyCommands', { commands: [...BOT_USER_COMMANDS, { command: 'panel', description: '🛠 Control panel' }], scope });
+  else await tgApiPost('deleteMyCommands', { scope });
+}
+async function setupBotCommands() {
+  if (!process.env.TELEGRAM_BOT_TOKEN) return;
+  await tgApiPost('setMyCommands', { commands: BOT_USER_COMMANDS, scope: { type: 'default' } });
+  const ids = new Set(cbOwnerIds());
+  try { (await cbGetDynamicAdmins()).forEach(i => ids.add(String(i))); } catch (e) {}
+  try {
+    const raw = await redisCommand(['GET', 'admins']);
+    const a = raw ? JSON.parse(raw) : null;
+    if (a) { if (a.ownerId) ids.add(String(a.ownerId)); (a.list || []).forEach(x => ids.add(String(x.id || x))); }
+  } catch (e) {}
+  for (const id of ids) await setAdminCommands(id, true);
+}
+
+app.listen(PORT, () => {
+  console.log(`Support backend listening on port ${PORT}`);
+  setTimeout(() => setupBotCommands().catch(e => console.warn('[commands] setup skipped:', e.message)), 4000);
+});

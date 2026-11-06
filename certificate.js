@@ -44,6 +44,14 @@ const STYLE = {
   },
 };
 
+// Festival templates have different colours than the old classic ones (the Diamond card is ruby red), so the number
+// colours follow the preset too. Gold keeps its gold metal.
+const FESTIVAL_STYLE = {
+  silver:   { glow: 'rgba(255,215,160,0.75)' },
+  platinum: { stops: [[0, '#ffffff'], [0.4, '#ffe9ee'], [0.68, '#ff9fb2'], [1, '#e2445e']], glow: 'rgba(255,60,90,0.9)', edge: 'rgba(255,255,255,0.6)', small_color: '#ffd0d8' },
+};
+function styleFor(tier, lay) { return Object.assign({}, STYLE[tier], lay && lay.preset === 'festival' ? FESTIVAL_STYLE[tier] : null); }
+
 // ---- Layout presets (all numbers are FRACTIONS: x/cx/maxW of width, base/size of height) -------------
 // "classic"  = the original 1672x941 templates (name + 2 numbers + "Issued"/"Certificate ID" footer line)
 // "festival" = the ChatGPT-style festival templates (name between the two ornament lines, numbers inside the laurels,
@@ -66,19 +74,22 @@ function classicLayout(tier) {
     small: 21 / CH,
   };
 }
-function festivalLayout() {
-  // measured on the 1024x576 Diwali template: name between the ornament lines, number rows level with the "GOLD" text,
-  // streak number sits LEFT of the flame icon so it never overlaps it.
-  return {
-    preset: 'festival',
-    name:   { cx: 512 / 1024, base: 246 / 576, size: 44 / 576, maxW: 460 / 1024 },
-    days:   { cx: 258 / 1024, base: 340 / 576, size: 40 / 576, maxW: 84 / 1024 },
-    streak: { cx: 487 / 1024, base: 340 / 576, size: 40 / 576, maxW: 56 / 1024 },
-    date: null, cid: null, small: 21 / 576,
-  };
+// Measured per template (name between the two ornaments, numbers inside the laurels, level with the tier text):
+//   gold     -> 1024x576  Diwali template (streak number sits LEFT of the flame icon)
+//   silver   -> 1280x720  Diwali fireworks template
+//   platinum -> 1280x721  Diwali "Diamond" template
+const FESTIVAL_PX = {
+  gold:     { w: 1024, h: 576, name: [512, 246, 44, 460], days: [258, 340, 40, 84],  streak: [487, 340, 40, 56] },
+  silver:   { w: 1280, h: 720, name: [640, 274, 42, 520], days: [371, 366, 40, 100], streak: [627, 366, 40, 110] },
+  platinum: { w: 1280, h: 721, name: [640, 288, 42, 500], days: [379, 388, 40, 100], streak: [624, 388, 40, 110] },
+};
+function festivalLayout(tier) {
+  const p = FESTIVAL_PX[tier] || FESTIVAL_PX.gold;
+  const f = (a) => ({ cx: a[0] / p.w, base: a[1] / p.h, size: a[2] / p.h, maxW: a[3] / p.w });
+  return { preset: 'festival', name: f(p.name), days: f(p.days), streak: f(p.streak), date: null, cid: null, small: 21 / p.h };
 }
 function defaultLayout(tier, preset) {
-  return preset === 'festival' ? festivalLayout() : classicLayout(tier);
+  return preset === 'festival' ? festivalLayout(tier) : classicLayout(tier);
 }
 // With nothing saved: the old full-size 16:9 templates (~1672x941) -> classic, anything else (1024x576 festival art,
 // Telegram's 1280x720 compressed copy, ...) -> festival. The bot also saves the layout at upload time, so this is only a fallback.
@@ -97,6 +108,22 @@ function sanitizeLayout(l, tier, w, h) {
   return out;
 }
 
+// loadImage() from the canvas library never settles on some corrupt buffers, which would freeze every certificate
+// render (and the group post). Check the file signature first and give up after a few seconds.
+function looksLikeImage(b) {
+  if (!Buffer.isBuffer(b) || b.length < 64) return false;
+  const png = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+  const jpg = b[0] === 0xff && b[1] === 0xd8;
+  const webp = b.slice(0, 4).toString() === 'RIFF' && b.slice(8, 12).toString() === 'WEBP';
+  return png || jpg || webp;
+}
+async function safeLoadImage(b) {
+  if (!looksLikeImage(b)) throw new Error('Ye valid PNG / JPG / WEBP image nahi hai.');
+  let timer;
+  const guard = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('Image decode timeout — file corrupt lag rahi hai.')), 8000); });
+  try { return await Promise.race([loadImage(b), guard]); } finally { clearTimeout(timer); }
+}
+
 // ---- Storage hooks (set by server.js) -------------------------------------------------
 let providers = { loadTemplate: null, loadLayout: null };
 function setProviders(p) { providers = Object.assign({ loadTemplate: null, loadLayout: null }, p || {}); templates.clear(); }
@@ -108,7 +135,7 @@ async function getTemplate(tier) {
   if (providers.loadTemplate) {
     try {
       const buf = await providers.loadTemplate(tier);
-      if (buf && buf.length) { img = await loadImage(buf); source = 'bot'; }
+      if (buf && buf.length) { img = await safeLoadImage(buf); source = 'bot'; }
     } catch (e) { console.error('[cert] stored template unusable, using packaged file:', e.message); img = null; }
   }
   if (!img) img = await loadImage(path.join(ASSETS, 'cert', tier + '.png'));
@@ -129,7 +156,7 @@ async function templateInfo(tier) {
 
 // Re-encodes an uploaded image so it is small enough for Redis (<= ~640 KB) without visible quality loss.
 async function prepareTemplate(buffer) {
-  const img = await loadImage(buffer);
+  const img = await safeLoadImage(buffer);
   let w = img.width, h = img.height;
   if (w < 500 || h < 280) throw new Error(`Image bahut chhoti hai (${w}x${h}). Kam se kam 1000px chaudi image bhejo.`);
   const MAXW = 1800;
@@ -224,7 +251,7 @@ async function renderCertificate(opts) {
   const streak = Math.max(0, parseInt(opts.streak, 10) || 0);
   const tier = STYLE[opts.tier] ? opts.tier : tierForDays(totalDays);
   const T = await getTemplate(tier);
-  const W = T.w, H = T.h, lay = T.layout, S = STYLE[tier];
+  const W = T.w, H = T.h, lay = T.layout, S = styleFor(tier, lay);
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(T.img, 0, 0);

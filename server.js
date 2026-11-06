@@ -1412,10 +1412,10 @@ function panelPromptText(title, instruction) {
 const _PANEL_SECTIONS = {
   cert: {
     title: '🎖️ CERTIFICATES (CARDS)',
-    sub: 'Silver, Gold & Platinum cards — upload from here, no site visit needed',
+    sub: 'Silver, Gold & Diamond cards — upload from here, no site visit needed',
     ownerOnly: false,
     buttons: [
-      [{ label: '🥈 Silver', kind: 's', action: 'cert_silver' }, { label: '🥇 Gold', kind: 's', action: 'cert_gold' }, { label: '💎 Platinum', kind: 's', action: 'cert_platinum' }],
+      [{ label: '🥈 Silver', kind: 's', action: 'cert_silver' }, { label: '🥇 Gold', kind: 's', action: 'cert_gold' }, { label: '💎 Diamond', kind: 's', action: 'cert_platinum' }],
       [{ label: 'ℹ️ Cards Status', kind: 'do', action: 'cert_status' }, { label: '♻️ Restore Default Cards', kind: 'do', action: 'restore_default_certs' }],
     ]
   },
@@ -1477,7 +1477,7 @@ const _PANEL_SECTIONS = {
 };
 
 for (const t of ['silver', 'gold', 'platinum']) {
-  const m = { silver: ['🥈', 'Silver'], gold: ['🥇', 'Gold'], platinum: ['💎', 'Platinum'] }[t];
+  const m = { silver: ['🥈', 'Silver'], gold: ['🥇', 'Gold'], platinum: ['💎', 'Diamond'] }[t];
   _PANEL_SECTIONS['cert_' + t] = {
     title: `${m[0]} ${m[1].toUpperCase()} CARD`,
     sub: 'Template, text position & live preview',
@@ -1486,7 +1486,7 @@ for (const t of ['silver', 'gold', 'platinum']) {
     buttons: [
       [{ label: `🧪 Test ${m[1]}`, kind: 'do', action: `test_cert:${t}` }, { label: '📤 Update Template', kind: 'ask', action: `upload_cert:${t}` }],
       [{ label: '📐 Adjust Text Position', kind: 'lay', action: `${t}:name:sel:1` }],
-      [{ label: '↩️ Undo Last Update', kind: 'do', action: `cert_undo:${t}` }],
+      [{ label: '↩️ Undo Last Update', kind: 'do', action: `cert_undo:${t}` }, { label: '🗂 Use GitHub File', kind: 'do', action: `cert_pkg:${t}` }],
     ]
   };
 }
@@ -1550,8 +1550,8 @@ const _PANEL_ASK = {
     section: 'cert_gold'
   },
   'upload_cert:platinum': {
-    title: 'UPLOAD PLATINUM CARD',
-    instruction: 'Naye <b>Platinum Certificate</b> ki blank template image bhejo (naam/numbers ke bina).\n\n📎 <b>Best quality:</b> image ko <b>File / Document</b> ki tarah bhejo (📎 → File). Photo ki tarah bhejoge to Telegram compress kar dega — phir bhi chalega.\n📐 16:9 image best hai (jaise 1672×941 ya 1024×576).\nBot template save karke live preview dikhayega; text sahi jagah na ho to wahin se adjust kar sakte ho.',
+    title: 'UPLOAD DIAMOND CARD',
+    instruction: 'Naye <b>Diamond Certificate</b> ki blank template image bhejo (naam/numbers ke bina).\n\n📎 <b>Best quality:</b> image ko <b>File / Document</b> ki tarah bhejo (📎 → File). Photo ki tarah bhejoge to Telegram compress kar dega — phir bhi chalega.\n📐 16:9 image best hai (jaise 1672×941 ya 1024×576).\nBot template save karke live preview dikhayega; text sahi jagah na ho to wahin se adjust kar sakte ho.',
     section: 'cert_platinum'
   },
   'broadcast': {
@@ -1632,7 +1632,7 @@ const CERT_TIERS = ['silver', 'gold', 'platinum'];
 const CERT_META = {
   silver:   { icon: '🥈', label: 'Silver',   test: { days: 12, streak: 7 } },
   gold:     { icon: '🥇', label: 'Gold',     test: { days: 35, streak: 14 } },
-  platinum: { icon: '💎', label: 'Platinum', test: { days: 85, streak: 25 } },
+  platinum: { icon: '💎', label: 'Diamond', test: { days: 85, streak: 25 } },
 };
 async function certGetStoredTemplate(tier) {
   const b64 = await redisCommand(['GET', 'certtpl:' + tier]);
@@ -1830,6 +1830,22 @@ async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
       tgDeleteMsgIn(chatId, messageId);
     } catch (e) {
       await tgSendText(chatId, `✅ Undo ho gaya, par preview nahi ban paya: ${esc(e.message)}`, { parse_mode: 'HTML' });
+    }
+    return;
+  }
+
+  if (action.startsWith('cert_pkg:')) {
+    // Drops the bot-uploaded template + layout so the card goes back to the file shipped in GitHub (assets/cert/<tier>.png).
+    const tier = action.split(':')[1];
+    if (!CERT_TIERS.includes(tier)) return;
+    try {
+      for (const k of ['certtpl:', 'certlayout:', 'certtpl_prev:', 'certlayout_prev:']) await redisCommand(['DEL', k + tier]);
+      certCachesClear(tier);
+      await sendCardPreview(chatId, tier, fromUser, `🗂 <b>${CERT_META[tier].label} card ab GitHub wali file se chal raha hai.</b>\n\nBot se upload kiya hua template hata diya gaya.`,
+        { inline_keyboard: [[{ text: '📐 Adjust Text', callback_data: `panel:lay:${tier}:name:sel:1` }], [{ text: '⬅️ Back to Card', callback_data: `panel:s:cert_${tier}` }]] });
+      tgDeleteMsgIn(chatId, messageId);
+    } catch (e) {
+      await tgSendText(chatId, `❌ Fail hua: ${esc(e.message)}`, { parse_mode: 'HTML' });
     }
     return;
   }
@@ -3271,7 +3287,7 @@ app.post('/api/notify/support', async (req, res) => {
 
   // Caption matches the certificate image (same tier, days and streak) — no festival editions.
   const tierKey = tierForDays(d);
-  const tierLabel = tierKey.charAt(0).toUpperCase() + tierKey.slice(1);
+  const tierLabel = tierKey === 'platinum' ? 'Diamond' : tierKey.charAt(0).toUpperCase() + tierKey.slice(1);
   const tierIcon = tierKey === 'platinum' ? '💎' : tierKey === 'gold' ? '🥇' : '🥈';
   const buttonText = '🏅 Claim your Certificate';
   const caption =

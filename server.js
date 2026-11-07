@@ -761,6 +761,7 @@ async function checkIsAdmin(userId, chatId) {
 // Presets so you can type just the name. ANY other GPLinks-style provider works too: /setshortlink <name> <apiKey> <https://their-api-url>
 const KNOWN_PROVIDERS = {
   gplinks: 'https://api.gplinks.com/api',
+  vplink: 'https://vplink.in/api',
   shrinkme: 'https://shrinkme.io/api',
   shrinkearn: 'https://shrinkearn.com/api',
   droplink: 'https://droplink.co/api',
@@ -1669,7 +1670,7 @@ const _PANEL_ASK = {
   },
   'set_shortlink': {
     title: 'SET SHORTLINK PROVIDER',
-    instruction: 'Shortlink details bhejo:\nFormat: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\n\n• <code>gplinks YOUR_KEY</code>\n• Presets: <code>gplinks, shrinkme, shrinkearn, droplink, arolinks, linkshortify</code>\n• Koi bhi aur provider: <code>myprov KEY https://api.myprov.com/api</code>\n• Wapas ad-task: <code>custom</code>\n\n<i>Key wala message bot save karke delete kar dega.</i>',
+    instruction: 'Shortlink details bhejo:\nFormat: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\n\n• <code>gplinks YOUR_KEY</code>\n• Presets: <code>gplinks, vplink, shrinkme, shrinkearn, droplink, arolinks, linkshortify</code>\n• Koi bhi aur provider: <code>myprov KEY https://api.myprov.com/api</code>\n• Wapas ad-task: <code>custom</code>\n\n<i>Key wala message bot save karke delete kar dega.</i>',
     section: 'settings'
   },
   'search_vault': {

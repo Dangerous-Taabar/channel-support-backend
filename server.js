@@ -261,15 +261,23 @@ app.post('/api/support/start', async (req, res) => {
 
   const sessionId = crypto.randomBytes(16).toString('hex');
   const token = signToken(sessionId);
-  await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false });
-  setSessionCookie(res, sessionId);
-
-  const frontendBase = (process.env.FRONTEND_URL || 'https://channel-support.pages.dev').replace(/\/$/, '');
   const callbackUrl = `${PUBLIC_BASE_URL}/api/support/callback?session=${sessionId}&token=${token}`;
-  const customTaskUrl = `https://raysfinvidya.pages.dev/?step=1&ret=${encodeURIComponent(callbackUrl)}`;
 
-  // ALWAYS return our Dedicated Adsterra raysfinvidya Portal (Study Rays Clone)
-  return res.json({ sessionId, shortlink: customTaskUrl });
+  // Provider chosen from the bot (Settings → Set Shortlink Provider / /setshortlink). Any GPLinks-style provider works.
+  // If the provider is down or the key is wrong, users get the built-in Custom Ad Task instead of being blocked,
+  // and the owners get one DM (max every 30 min).
+  const cfg = await getShortlinkConfig();
+  let shortlink = null, providerUsed = 'custom';
+  if (cfg.provider && cfg.provider !== 'custom') {
+    try { shortlink = await shortenWithProvider(cfg, callbackUrl); providerUsed = cfg.provider; }
+    catch (e) { console.error(`[shortlink] ${cfg.provider} failed:`, e.message); alertShortlinkProblem(cfg.provider, e.message); }
+  }
+  if (!shortlink) shortlink = customTaskLink(callbackUrl);
+
+  // createdAt starts when the user actually gets the link, so the minimum-dwell check measures real time spent on the steps.
+  await sessionSet(sessionId, { deviceId, createdAt: Date.now(), verified: false, verifiedAt: null, consumed: false, provider: providerUsed });
+  setSessionCookie(res, sessionId);
+  return res.json({ sessionId, shortlink });
 });
 
 // ---------------------------------------------------------------------------
@@ -750,20 +758,78 @@ async function checkIsAdmin(userId, chatId) {
 // Works with any GPLinks-style provider: GET {apiUrl}?api={key}&url={target}
 // returning JSON with a "shortenedUrl" or "short_url" field.
 // ---------------------------------------------------------------------------
+// Presets so you can type just the name. ANY other GPLinks-style provider works too: /setshortlink <name> <apiKey> <https://their-api-url>
 const KNOWN_PROVIDERS = {
   gplinks: 'https://api.gplinks.com/api',
+  shrinkme: 'https://shrinkme.io/api',
+  shrinkearn: 'https://shrinkearn.com/api',
+  droplink: 'https://droplink.co/api',
+  arolinks: 'https://arolinks.com/api',
+  linkshortify: 'https://linkshortify.com/api',
 };
+const CUSTOM_TASK_BASE = process.env.CUSTOM_TASK_URL || 'https://raysfinvidya.pages.dev/?step=1';
+const customTaskLink = (callbackUrl) => `${CUSTOM_TASK_BASE}${CUSTOM_TASK_BASE.includes('?') ? '&' : '?'}ret=${encodeURIComponent(callbackUrl)}`;
 
 async function getShortlinkConfig() {
   try {
     const raw = await redisCommand(['GET', 'shortlink_config']);
     if (raw) return JSON.parse(raw);
   } catch (e) { /* fall through to env-based default below */ }
-  return {
-    provider: 'gplinks',
-    apiKey: process.env.GPLINKS_API_KEY || '',
-    apiUrl: process.env.GPLINKS_API_URL || KNOWN_PROVIDERS.gplinks,
-  };
+  // Nothing saved yet: GPLinks only if its key is in the env, otherwise the built-in Custom Ad Task.
+  return process.env.GPLINKS_API_KEY
+    ? { provider: 'gplinks', apiKey: process.env.GPLINKS_API_KEY, apiUrl: process.env.GPLINKS_API_URL || KNOWN_PROVIDERS.gplinks }
+    : { provider: 'custom', apiKey: '', apiUrl: '' };
+}
+const maskKey = (k) => (k ? (k.length > 8 ? k.slice(0, 4) + '••••' + k.slice(-3) : '••••') : '(not set)');
+
+// Asks the provider for a short link: GET {apiUrl}?api={key}&url={target}. Understands the common reply shapes
+// (JSON with shortenedUrl / short_url / ..., or a bare URL as plain text). The API key never appears in error text.
+async function shortenWithProvider(cfg, target) {
+  if (!cfg || !cfg.apiKey || !cfg.apiUrl) throw new Error('API key ya API URL set nahi hai');
+  const hide = (m) => String(m || '').split(cfg.apiKey).join('***').slice(0, 160);
+  const url = `${cfg.apiUrl}${cfg.apiUrl.includes('?') ? '&' : '?'}api=${encodeURIComponent(cfg.apiKey)}&url=${encodeURIComponent(target)}`;
+  let text;
+  try {
+    const r = await fetch(url, { timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ChannelSupportBot/1.0)', Accept: 'application/json,text/plain,*/*' } });
+    if (r.status >= 500) throw new Error(`provider HTTP ${r.status}`);
+    text = await r.text();
+  } catch (e) { throw new Error(hide(e.message || e)); }
+  let j = null; try { j = JSON.parse(text); } catch (_) { /* maybe plain text */ }
+  let short = null;
+  if (j && typeof j === 'object') {
+    if (/^(error|fail)/i.test(String(j.status || ''))) throw new Error(hide(j.message || j.msg || j.error || 'provider ne error diya'));
+    const d = j.data && typeof j.data === 'object' ? j.data : {};
+    short = j.shortenedUrl || j.shortened_url || j.short_url || j.shortUrl || j.result_url || j.link || j.url || d.shortenedUrl || d.short_url || d.url || null;
+  } else if (/^https?:\/\/\S+$/i.test(String(text).trim())) short = String(text).trim();
+  if (!short || !/^https?:\/\/\S+$/i.test(String(short)) || short === target) throw new Error('provider ne short link nahi diya (API key / domain approval check karo)');
+  return String(short);
+}
+let _lastShortlinkAlert = 0;
+function alertShortlinkProblem(provider, reason) {   // at most one DM per 30 minutes
+  if (Date.now() - _lastShortlinkAlert < 30 * 60 * 1000) return;
+  _lastShortlinkAlert = Date.now();
+  for (const oid of cbOwnerIds()) tgSendText(oid, `⚠️ <b>Shortlink (${esc(provider)}) fail ho raha hai</b>\n${esc(reason)}\n\nUsers ko abhi <b>Custom Ad Task</b> (fallback) mil raha hai.\nAPI key / URL check karo ya Panel → Settings → 🧪 Test Shortlink chalao.`, { parse_mode: 'HTML' }).catch(() => {});
+}
+// One place for "/setshortlink ..." and the panel prompt. parts = [provider, apiKey, apiUrl?]
+async function applyShortlinkSetting(parts) {
+  const first = (parts[0] || '').toLowerCase();
+  if (first === 'custom' || first === 'ads') {
+    await setShortlinkConfig({ provider: 'custom', apiKey: '', apiUrl: '' });
+    return { ok: true, text: '✅ Provider: <b>Custom Ad Task</b>\nUsers ab seedha ad-task portal se support karenge (koi shortlink nahi).' };
+  }
+  const presets = Object.keys(KNOWN_PROVIDERS).join(', ');
+  if (parts.length < 2) return { ok: false, text: `Format: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\nPreset names: <code>${presets}</code>\nKoi bhi aur provider: <code>myprov KEY https://api.myprov.com/api</code>\nWapas ad-task: <code>custom</code>` };
+  const provider = parts[0].toLowerCase(), apiKey = parts[1], apiUrl = parts[2] || KNOWN_PROVIDERS[provider];
+  if (!/^[a-z0-9_-]{2,20}$/.test(provider)) return { ok: false, text: '❌ Provider ka naam sirf a-z, 0-9, - ya _ (2–20 akshar) ho sakta hai.' };
+  if (apiKey.length < 6) return { ok: false, text: '❌ API key bahut chhoti lag rahi hai — poori key paste karo.' };
+  if (!apiUrl) return { ok: false, text: `❌ <b>${esc(provider)}</b> ka API URL pata nahi. Poora URL bhi do:\n<code>${esc(provider)} KEY https://api.example.com/api</code>\nPresets: <code>${presets}</code>` };
+  if (!/^https:\/\/[^\s]+$/i.test(apiUrl)) return { ok: false, text: '❌ API URL <code>https://</code> se shuru hona chahiye.' };
+  const cfg = { provider, apiKey, apiUrl };
+  await setShortlinkConfig(cfg);
+  let test;
+  try { test = `🧪 Test OK — short link bana: <code>${esc(await shortenWithProvider(cfg, `${PUBLIC_BASE_URL}/api/support/callback?session=test&token=test`))}</code>`; }
+  catch (e) { test = `⚠️ Save ho gaya, par test fail: ${esc(e.message)}\nTab tak users ko fallback (Custom Ad Task) milega.`; }
+  return { ok: true, text: `✅ Shortlink provider set: <b>${esc(provider)}</b>\nAPI URL: <code>${esc(apiUrl)}</code>\nKey: <code>${maskKey(apiKey)}</code>\n\n${test}\n\n<i>Agle support-attempt se yahi use hoga — redeploy nahi chahiye.</i>` };
 }
 async function setShortlinkConfig(cfg) {
   await redisCommand(['SET', 'shortlink_config', JSON.stringify(cfg)]);
@@ -808,36 +874,31 @@ function formatRemaining(ms) {
 // Handles owner/admin-only DM commands. Returns true if the message WAS one
 // of these commands (caller should stop processing), false otherwise.
 // ---------------------------------------------------------------------------
-async function handleOwnerCommand(text, userId) {
+async function shortlinkTestText(cfg) {
+  if (!cfg.provider || cfg.provider === 'custom') return '🧪 Abhi <b>Custom Ad Task</b> active hai — test karne ke liye koi provider set nahi. <code>/setshortlink gplinks KEY</code> se provider jodo.';
+  try { return `🧪 <b>${esc(cfg.provider)}</b> OK ✅\nShort link bana: <code>${esc(await shortenWithProvider(cfg, `${PUBLIC_BASE_URL}/api/support/callback?session=test&token=test`))}</code>`; }
+  catch (e) { return `🧪 <b>${esc(cfg.provider)}</b> FAIL ❌\n${esc(e.message)}\n\nUsers ko abhi fallback (Custom Ad Task) mil raha hai.`; }
+}
+async function handleOwnerCommand(text, userId, msgId) {
   const lower = text.toLowerCase();
 
   if (lower === '/shortlinkstatus') {
     const cfg = await getShortlinkConfig();
-    const maskedKey = cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-3) : '(not set)';
-    await tgSendText(userId, `🔗 Current Shortlink Provider\n\nProvider: ${cfg.provider}\nAPI URL: ${cfg.apiUrl}\nAPI Key: ${maskedKey}`);
+    await tgSendText(userId, `🔗 <b>Current Shortlink Provider</b>\n\nProvider: <code>${esc(cfg.provider)}</code>\nAPI URL: <code>${esc(cfg.apiUrl || '(custom ad task)')}</code>\nAPI Key: <code>${maskKey(cfg.apiKey)}</code>`, { parse_mode: 'HTML' });
+    return true;
+  }
+
+  if (lower === '/testshortlink') {
+    await tgSendText(userId, await shortlinkTestText(await getShortlinkConfig()), { parse_mode: 'HTML' });
     return true;
   }
 
   if (lower.startsWith('/setshortlink')) {
-    // /setshortlink <provider> <apiKey> [apiUrl]
-    const parts = text.split(/\s+/).slice(1);
-    if (parts[0] && (parts[0].toLowerCase() === 'custom' || parts[0].toLowerCase() === 'ads')) {
-      await setShortlinkConfig({ provider: 'custom', apiKey: '', apiUrl: '' });
-      await tgSendText(userId, `✅ Shortlink provider set to Custom Ad Task (task-verify.html with Adsterra)!\n\nAb users bina kisi shortlink failure ke seedha ads dekh kar support kar sakenge.`);
-      return true;
-    }
-    if (parts.length < 2) {
-      await tgSendText(userId, `Usage: /setshortlink <provider> <apiKey> [apiUrl]\n\nExample (Custom Ads): /setshortlink custom\nExample (GPLinks): /setshortlink gplinks YOUR_API_KEY\nExample (any other provider): /setshortlink vplink YOUR_API_KEY https://api.vplink.in/api`);
-      return true;
-    }
-    const [provider, apiKey, customUrl] = parts;
-    const apiUrl = customUrl || KNOWN_PROVIDERS[provider.toLowerCase()];
-    if (!apiUrl) {
-      await tgSendText(userId, `❌ '${provider}' ka API URL pata nahi hai — poora URL bhi daalo: /setshortlink ${provider} ${apiKey} https://api.example.com/api`);
-      return true;
-    }
-    await setShortlinkConfig({ provider: provider.toLowerCase(), apiKey, apiUrl });
-    await tgSendText(userId, `✅ Shortlink provider update ho gaya!\n\nProvider: ${provider}\nAPI URL: ${apiUrl}\n\nAgle support-attempt se yahi use hoga — koi redeploy nahi chahiye.`);
+    // /setshortlink <provider> <apiKey> [apiUrl]   |   /setshortlink custom
+    const words = text.split(/\s+/);
+    const r = await applyShortlinkSetting(words.slice(1));
+    await tgSendText(userId, r.text, { parse_mode: 'HTML' });
+    if (r.ok && msgId && words.length > 2) tgDeleteMsgIn(userId, msgId); // that message contains the API key
     return true;
   }
 
@@ -1470,7 +1531,7 @@ const _PANEL_SECTIONS = {
     buttons: [
       [{ label: '🎭 Set Season Theme', kind: 'ask', action: 'set_season' }],
       [{ label: '📍 Support Topic Status', kind: 'do', action: 'topic_status' }],
-      [{ label: '🔗 Set Shortlink Provider', kind: 'ask', action: 'set_shortlink' }],
+      [{ label: '🔗 Set Shortlink Provider', kind: 'ask', action: 'set_shortlink' }, { label: '🧪 Test Shortlink', kind: 'do', action: 'shortlink_test' }],
     ]
   },
   vault: {
@@ -1608,7 +1669,7 @@ const _PANEL_ASK = {
   },
   'set_shortlink': {
     title: 'SET SHORTLINK PROVIDER',
-    instruction: 'Shortlink details bhejo:\nFormat: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\nExample: <code>custom</code> (Adsterra) ya <code>gplinks YOUR_KEY</code>',
+    instruction: 'Shortlink details bhejo:\nFormat: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\n\n• <code>gplinks YOUR_KEY</code>\n• Presets: <code>gplinks, shrinkme, shrinkearn, droplink, arolinks, linkshortify</code>\n• Koi bhi aur provider: <code>myprov KEY https://api.myprov.com/api</code>\n• Wapas ad-task: <code>custom</code>\n\n<i>Key wala message bot save karke delete kar dega.</i>',
     section: 'settings'
   },
   'search_vault': {
@@ -2557,19 +2618,25 @@ async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
 
   if (action === 'shortlink_stats') {
     const cfg = await getShortlinkConfig();
-    const maskedKey = cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-3) : '(custom ads)';
+    const custom = !cfg.provider || cfg.provider === 'custom';
     const text = [
       panelHeader('🔗', 'MONETIZATION & ADS', 'Active Configuration'),
-      `🌐 <b>Provider:</b> <code>${cfg.provider}</code>`,
-      `🎯 <b>Task Portal:</b> <code>https://raysfinvidya.pages.dev/</code>`,
-      `🔑 <b>API Key:</b> <code>${maskedKey}</code>`,
-      `📡 <b>Ad Engine:</b> <code>5-Step Adsterra Monetization</code>`,
+      `🌐 <b>Provider:</b> <code>${esc(cfg.provider || 'custom')}</code>`,
+      custom ? `🎯 <b>Task Portal:</b> <code>${esc(CUSTOM_TASK_BASE)}</code>` : `🔌 <b>API URL:</b> <code>${esc(cfg.apiUrl)}</code>`,
+      `🔑 <b>API Key:</b> <code>${custom ? '(custom ads)' : maskKey(cfg.apiKey)}</code>`,
+      custom ? '📡 <b>Mode:</b> <code>Adsterra task portal</code>' : '📡 <b>Fallback:</b> <code>Custom Ad Task (agar provider fail ho)</code>',
       '',
-      '<i>Provider change karne ke liye Settings me "Set Shortlink" use karo.</i>'
+      '<i>Badalne ke liye Settings → "Set Shortlink Provider"; check karne ke liye "Test Shortlink".</i>'
     ].join('\n');
     await tgEdit(chatId, messageId, text, {
-      inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'panel:s:stats' }]]
+      inline_keyboard: [[{ text: '🧪 Test Shortlink', callback_data: 'panel:do:shortlink_test' }], [{ text: '⬅️ Back', callback_data: 'panel:s:stats' }]]
     }, 'HTML');
+    return;
+  }
+
+  if (action === 'shortlink_test') {
+    const cfg = await getShortlinkConfig();
+    await tgEdit(chatId, messageId, await shortlinkTestText(cfg), { inline_keyboard: [[{ text: '🔗 Config', callback_data: 'panel:do:shortlink_stats' }, { text: '🎨 Settings', callback_data: 'panel:s:settings' }]] }, 'HTML');
     return;
   }
 
@@ -2768,7 +2835,8 @@ async function handlePanelPendingInput(msg) {
   }
 
   // Festival Sets prompts (new set name, schedule dates, 3-card wizard)
-  if (action.startsWith('set_')) return handleSetPending(msg, action, userId);
+  // (exact names only: other prompts such as set_season / set_shortlink also start with "set_" and must reach their own handlers below)
+  if (action === 'set_new' || action === 'set_snap' || action.startsWith('set_sched:') || action.startsWith('set_wiz:')) return handleSetPending(msg, action, userId);
 
   // Case 1: Certificate Template Upload
   if (action.startsWith('upload_cert:')) {
@@ -2995,28 +3063,12 @@ async function handlePanelPendingInput(msg) {
   }
 
   if (action === 'set_shortlink') {
-    const parts = rawText.split(/\s+/);
-    if (parts[0] && (parts[0].toLowerCase() === 'custom' || parts[0].toLowerCase() === 'ads')) {
-      await setShortlinkConfig({ provider: 'custom', apiKey: '', apiUrl: '' });
-      await tgSendText(msg.chat.id, `✅ Shortlink set to Custom Ad Task (raysfinvidya Adsterra Portal)!`, {
-        reply_markup: { inline_keyboard: [[{ text: '🎨 Settings Menu', callback_data: 'panel:s:settings' }]] }
-      });
-      return true;
-    }
-    if (parts.length < 2) {
-      await tgSendText(msg.chat.id, `Format: <code>&lt;provider&gt; &lt;apiKey&gt; [apiUrl]</code>\nExample: <code>custom</code> ya <code>gplinks YOUR_KEY</code>`, { parse_mode: 'HTML' });
-      return true;
-    }
-    const [provider, apiKey, customUrl] = parts;
-    const apiUrl = customUrl || KNOWN_PROVIDERS[provider.toLowerCase()];
-    if (!apiUrl) {
-      await tgSendText(msg.chat.id, `❌ API URL missing. Format: <code>${provider} ${apiKey} https://api...</code>`, { parse_mode: 'HTML' });
-      return true;
-    }
-    await setShortlinkConfig({ provider: provider.toLowerCase(), apiKey, apiUrl });
-    await tgSendText(msg.chat.id, `✅ Shortlink updated: <b>${provider}</b>`, {
+    const words = rawText.split(/\s+/);
+    const r = await applyShortlinkSetting(words);
+    if (r.ok && words.length > 1 && msg.message_id) tgDeleteMsgIn(msg.chat.id, msg.message_id); // the message contains the API key
+    await tgSendText(msg.chat.id, r.text, {
       parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '🎨 Settings Menu', callback_data: 'panel:s:settings' }]] }
+      reply_markup: { inline_keyboard: [[{ text: '🧪 Test Again', callback_data: 'panel:do:shortlink_test' }, { text: '🎨 Settings Menu', callback_data: 'panel:s:settings' }]] }
     });
     return true;
   }
@@ -3192,7 +3244,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
       if (isAdmin && await handlePanelPendingInput(msg)) return;
 
       // ---- Owner/admin-only bot commands: shortlink provider + free-pass ----
-      if (isAdmin && msg.text && await handleOwnerCommand(msg.text.trim(), userId)) return;
+      if (isAdmin && msg.text && await handleOwnerCommand(msg.text.trim(), userId, msg.message_id)) return;
 
       // ---- /backupcards: send a backup file of all live cards + festival sets ----
       if (isAdmin && msg.text && /^\/backupcards(@\S+)?(\s|$)/i.test(msg.text.trim())) {
@@ -3221,9 +3273,12 @@ app.post('/api/telegram/webhook', async (req, res) => {
         return;
       }
 
-      const text = await buildWelcomeText(userId);
-      await tgSend(userId, text, mainMenuKeyboard(isAdmin));
-      return;
+      // Admin commands that live in the blocks below (/preview, /supporttopic ...) must not be swallowed by the welcome card.
+      if (!(isAdmin && /^\/(preview|testcard|testcert|supporttopic|setsupporttopic|resetsupporttopic)(@\S+)?(\s|$)/i.test(cmd))) {
+        const text = await buildWelcomeText(userId);
+        await tgSend(userId, text, mainMenuKeyboard(isAdmin));
+        return;
+      }
     }
 
     // ---- CASE 1.3: /setsupporttopic, /resetsupporttopic, /supporttopic — admin-only ----
@@ -3289,7 +3344,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
       }
     }
 
-    // ---- CASE 1.5: /preview (or /testcard) [silver|gold|platinum] — admin-only: posts a sample certificate ----
+    // ---- CASE 1.5: /preview (or /testcard) [silver|gold|diamond] — admin-only: posts a sample certificate ----
     if (msg.text && /^\/(testcard|preview|testcert)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
       const userId = msg.from ? msg.from.id : null;
@@ -3315,10 +3370,11 @@ app.post('/api/telegram/webhook', async (req, res) => {
         const name = (rec && rec.name) || fromName || 'Test Supporter';
         const totalDays = (rec && rec.totalDays) || 49;
         const streak = (rec && rec.streak) || 21;
-        const tier = ['silver', 'gold', 'platinum'].includes(arg) ? arg : tierForDays(totalDays);
+        const argTier = arg === 'diamond' ? 'platinum' : arg;            // the platinum slot is the Diamond card
+        const tier = ['silver', 'gold', 'platinum'].includes(argTier) ? argTier : tierForDays(totalDays);
         try {
           const img = await renderCertificate({ name, totalDays, streak, tier, issuedAt: Date.now(), firstSupportAt: rec && rec.firstSupportAt });
-          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${tier.toUpperCase()} certificate`, null, targetThread);
+          const out = await sendCertificatePhoto(targetChat, img, `🧪 <b>Admin Test Preview</b> — ${(tier === 'platinum' ? 'diamond' : tier).toUpperCase()} certificate`, null, targetThread);
           if (!out.ok) throw new Error(out.description || 'Telegram error');
           if (isPriv && String(targetChat) !== String(msg.chat.id)) {
             await tgSendText(msg.chat.id, `✅ Test certificate support topic me bhej diya gaya hai! Wahan check karo.`);
@@ -4071,7 +4127,7 @@ async function tgApiPost(method, body) {
 async function setAdminCommands(userId, isAdmin) {
   if (!process.env.TELEGRAM_BOT_TOKEN || !/^\d+$/.test(String(userId))) return;
   const scope = { type: 'chat', chat_id: Number(userId) };
-  if (isAdmin) await tgApiPost('setMyCommands', { commands: [...BOT_USER_COMMANDS, { command: 'panel', description: '🛠 Control panel' }, { command: 'backupcards', description: '💾 Backup cards' }], scope });
+  if (isAdmin) await tgApiPost('setMyCommands', { commands: [...BOT_USER_COMMANDS, { command: 'panel', description: '🛠 Control panel' }, { command: 'backupcards', description: '💾 Backup cards' }, { command: 'preview', description: '🧪 Test certificate' }], scope });
   else await tgApiPost('deleteMyCommands', { scope });
 }
 async function setupBotCommands() {

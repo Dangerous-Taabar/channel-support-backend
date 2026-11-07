@@ -68,18 +68,30 @@ const API_BASE_URL = "https://your-app.onrender.com";
 
 at the top of the `<script>` block. When this is set, the page calls the real backend instead of the built-in simulated timer/whitelist.
 
-## Ludo (ASTRA bot Mini App)
+## 6. Bot control panel (Certificates, Festival Sets, Backup)
 
-`ludo/` is a self-contained game router mounted at `/api/ludo` (see the 3 lines marked LUDO / ludo in `server.js`).
-It runs the multiplayer Ludo game for the ASTRA Telegram bot: rooms, real dice, rule checking, 30 s turn timers.
-The Mini App page itself is `ludo.html` on the Cloudflare frontend.
+Open the bot in a private chat and send `/panel` (owners and admins only).
 
-Environment variables (Render → Environment):
+**Certificates** (`/panel` → 🎖️ Certificates) — Silver, Gold and Diamond (the `platinum` slot) cards:
+- 📤 *Update Template*: send a blank 16:9 image (best as **File/Document**). Templates and text layouts are stored in **Redis**, not on disk, so they survive Render restarts. `assets/cert/<tier>.png` is only the fallback.
+- 📐 *Adjust Text Position*, 🧭 *Layout Guide* (empty template with labelled boxes + a ready ChatGPT prompt), 📋 *Copy ← other card*.
+- 📝 *Draft Mode*: uploads wait as a draft until ✅ Publish. 🕘 *History*: last 5 live versions. ↩️ *Undo*.
+- 🎆 *Festival Sets*: a named set of the 3 cards + layouts. Activate in one tap, or give it a date range (`01-11-2026 to 10-11-2026`); the bot switches on the start date and back to the ⭐ *Normal* set (or the GitHub default) when it ends, and DMs the owners.
+- 📣 *Announce*: posts the live cards in the support topic (set it once with `/setsupporttopic` inside that topic).
+- 💾 *Backup / 📥 Restore*: `/backupcards` sends a `.json.gz` with live cards, layouts and all sets. Restore is owner-only and must be under 20 MB (Telegram's bot download limit).
 
-| Variable | Meaning |
-|---|---|
-| `LUDO_BOT_TOKEN` | token of the ASTRA bot (@AstraControlBot) — only used to verify Telegram login data. **Not** `TELEGRAM_BOT_TOKEN`. |
-| `LUDO_BOT_SECRET` | long random string, must be identical to `LUDO_BOT_SECRET` in the ASTRA bot's `.env` |
-| `LUDO_TURN_SECONDS` | optional, seconds per turn (default 30) |
+**Commands** — everyone: `/start /mystatus /top10 /check`. Admins also: `/panel /backupcards /preview [silver|gold|diamond] /setsupporttopic /supporttopic /resetsupporttopic`.
 
-Health check: `GET /api/ludo/health` → `{"ok":true,"configured":true}`. Games live in memory: a Render restart ends running games (the bot refunds the entry fees).
+**Redis keys used by the cards system** (none are readable through the public storage API):
+`certtpl:<tier>`, `certlayout:<tier>`, `certtpl_prev:<tier>`, `certhist*`, `certdraft*`, `certset*`, `notify_target`.
+
+## 7. Shortlink provider (GPLinks or any other)
+
+Switch the provider from the bot, no redeploy: `/setshortlink <provider> <apiKey> [apiUrl]` or Panel → Settings → 🔗 Set Shortlink Provider.
+
+- Presets (name only): `gplinks, vplink, shrinkme, shrinkearn, droplink, arolinks, linkshortify` — e.g. `/setshortlink vplink YOUR_KEY`
+- Any other GPLinks-style provider: `/setshortlink myprov YOUR_KEY https://api.myprov.com/api` (the API is called as `GET {apiUrl}?api={key}&url={callback}` and may reply JSON with `shortenedUrl` / `short_url` / `url`, or a plain URL)
+- Back to the built-in ad task portal: `/setshortlink custom`
+- `/testshortlink` (or Panel → 🧪 Test Shortlink) makes a real short link to prove the key works; `/shortlinkstatus` shows the config with the key masked. The message that contains your key is deleted automatically.
+- If the provider fails (wrong key, down, no domain approval) users are NOT blocked: they get the Custom Ad Task and the owners get one DM (max every 30 min).
+- Env (optional): `GPLINKS_API_KEY` makes GPLinks the default before anything is saved; `CUSTOM_TASK_URL` changes the ad task portal (default `https://raysfinvidya.pages.dev/?step=1`).

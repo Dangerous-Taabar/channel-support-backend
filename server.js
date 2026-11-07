@@ -36,6 +36,8 @@ setInterval(() => rateLimitBuckets.clear(), RATE_LIMIT_WINDOW_MS).unref();
 app.use((req, res, next) => {
   // Ludo game traffic (live polling) has its own per-player limits inside ludo/ludo.js
   if (req.path.startsWith('/api/ludo/')) return next();
+  // Astra Store: the bots long-poll and the Mini App polls an order; store/store.js limits per user itself
+  if (req.path.startsWith('/api/store/')) return next();
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
   const count = (rateLimitBuckets.get(ip) || 0) + 1;
   rateLimitBuckets.set(ip, count);
@@ -108,6 +110,12 @@ function isValidReadOnlyKey(key) {
   return key === 'auth_epoch';
 }
 const MAX_VALUE_BYTES = 1_500_000; // ~1.5MB — comfortably covers a base64 logo
+
+// ---------------------------------------------------------------------------
+// ASTRA STORE - Mini App store (/store on the frontend). Needs STORE_SECRET (+ STORE_BOT_TOKEN, or it
+// reuses LUDO_BOT_TOKEN, the ASTRA bot token). Uses the same Redis as everything else.
+// ---------------------------------------------------------------------------
+app.use('/api/store', require('./store/store')(redisCommand));
 
 app.post('/api/storage/get', async (req, res) => {
   try {

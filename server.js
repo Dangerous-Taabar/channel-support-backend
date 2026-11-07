@@ -1416,6 +1416,7 @@ const _PANEL_SECTIONS = {
     ownerOnly: false,
     buttons: [
       [{ label: '🥈 Silver', kind: 's', action: 'cert_silver' }, { label: '🥇 Gold', kind: 's', action: 'cert_gold' }, { label: '💎 Diamond', kind: 's', action: 'cert_platinum' }],
+      [{ label: '🎆 Festival Sets (1-tap switch + schedule)', kind: 'set', action: 'list' }],
       [{ label: 'ℹ️ Cards Status', kind: 'do', action: 'cert_status' }, { label: '♻️ Restore Default Cards', kind: 'do', action: 'restore_default_certs' }],
     ]
   },
@@ -1485,7 +1486,7 @@ for (const t of ['silver', 'gold', 'platinum']) {
     back: 'cert',
     buttons: [
       [{ label: `🧪 Test ${m[1]}`, kind: 'do', action: `test_cert:${t}` }, { label: '📤 Update Template', kind: 'ask', action: `upload_cert:${t}` }],
-      [{ label: '📐 Adjust Text Position', kind: 'lay', action: `${t}:name:sel:1` }],
+      [{ label: '📐 Adjust Text Position', kind: 'lay', action: `${t}:name:sel:1` }, { label: '🧭 Layout Guide', kind: 'do', action: `cert_guide:${t}` }],
       [{ label: '↩️ Undo Last Update', kind: 'do', action: `cert_undo:${t}` }, { label: '🗂 Use GitHub File', kind: 'do', action: `cert_pkg:${t}` }],
     ]
   };
@@ -1672,6 +1673,7 @@ async function saveCertificateTemplate(tier, imageBuffer) {
   if (layoutNow && keepLayout) await redisCommand(['SET', 'certlayout:' + tier, JSON.stringify(layoutNow)]);
   else await redisCommand(['DEL', 'certlayout:' + tier]);  // untouched preset -> pick the right style for the NEW image size
   certCachesClear(tier);
+  await syncActiveSet(tier);
   return prep;
 }
 
@@ -1686,6 +1688,7 @@ async function undoCertificateTemplate(tier) {
   if (cur) await redisCommand(['SET', 'certtpl_prev:' + tier, cur]); else await redisCommand(['DEL', 'certtpl_prev:' + tier]);
   if (curLayout) await redisCommand(['SET', 'certlayout_prev:' + tier, curLayout]); else await redisCommand(['DEL', 'certlayout_prev:' + tier]);
   certCachesClear(tier);
+  await syncActiveSet(tier);
   return true;
 }
 
@@ -1700,6 +1703,7 @@ async function restoreDefaultCertificates() {
     await redisCommand(['DEL', 'certlayout:' + t]);
     done.push(t);
   }
+  await redisCommand(['DEL', 'certset_active']);
   certCachesClear();
   return done;
 }
@@ -1776,6 +1780,7 @@ async function handleLayoutCallback(cb, arg) {
     for (const k of ['name', 'days', 'streak']) for (const q of ['cx', 'base', 'size', 'maxW']) lay[k][q] = Math.round(lay[k][q] * 100000) / 100000;
     await redisCommand(['SET', 'certlayout:' + tier, JSON.stringify(lay)]);
     certCachesClear(tier);
+    await syncActiveSet(tier);
   }
 
   const t = CERT_META[tier].test;
@@ -1790,6 +1795,371 @@ async function handleLayoutCallback(cb, arg) {
     await sendCertificatePhoto(chatId, img, caption, kb); // opened from a text menu: show the photo, drop the menu
     tgDeleteMsgIn(chatId, messageId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// FESTIVAL SETS — one set = Silver + Gold + Diamond template (+ their text layout), saved under a name.
+//   Activate = copies the set onto the live cards in one tap. A set can carry a date range: the bot then switches to it
+//   automatically when the festival starts and back to "Normal" (or the GitHub default) when it ends.
+//   Redis: certset_index (JSON id list) · certset:<id> (meta) · certsettpl:<id>:<tier> · certsetlay:<id>:<tier>
+//          certset_active · certset_base (fallback "Normal" set) · certset_sched_last (what the scheduler applied last)
+//   While a set is active, edits to the live cards (upload / adjust / undo) are mirrored into it automatically.
+// ---------------------------------------------------------------------------
+const SET_MAX = 12;
+const IST_MS = 5.5 * 60 * 60 * 1000;
+const MONTHS_S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function istParts(ms) { const d = new Date(ms + IST_MS); return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() }; }
+function fmtIst(ms) { const p = istParts(ms); return `${String(p.d).padStart(2, '0')} ${MONTHS_S[p.m - 1]} ${p.y}`; }
+function istDayStart(y, m, d) { return Date.UTC(y, m - 1, d) - IST_MS; }
+// "01-11-2026 to 10-11-2026" / "1/11 - 10/11" (year optional, India day-month order) -> { from, to } in ms (IST days, end inclusive)
+function parseSchedule(text) {
+  const re = /(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2,4}))?/g;
+  const found = []; let m;
+  while ((m = re.exec(String(text))) && found.length < 2) found.push(m);
+  if (found.length < 2) return null;
+  const nowY = istParts(Date.now()).y;
+  const mk = (x) => {
+    let yy = x[3] ? Number(x[3]) : nowY; if (yy < 100) yy += 2000;
+    const dd = Number(x[1]), mm = Number(x[2]);
+    const dt = new Date(Date.UTC(yy, mm - 1, dd));
+    if (dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) return null;
+    return { y: yy, m: mm, d: dd };
+  };
+  const a = mk(found[0]), b = mk(found[1]);
+  if (!a || !b) return null;
+  const from = istDayStart(a.y, a.m, a.d);
+  let to = istDayStart(b.y, b.m, b.d) + 86400e3 - 1;
+  if (!found[1][3] && to < from) to = istDayStart(b.y + 1, b.m, b.d) + 86400e3 - 1; // "25 Dec - 5 Jan"
+  if (to < from) return null;
+  return { from, to };
+}
+
+async function certSetIndex() { try { const r = await redisCommand(['GET', 'certset_index']); const a = r ? JSON.parse(r) : []; return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+async function certSetGet(id) { const r = await redisCommand(['GET', 'certset:' + id]); return r ? JSON.parse(r) : null; }
+async function certSetPut(meta) { await redisCommand(['SET', 'certset:' + meta.id, JSON.stringify(meta)]); }
+async function certSetList() { const out = []; for (const id of await certSetIndex()) { const m = await certSetGet(id).catch(() => null); if (m) out.push(m); } return out; }
+async function certSetCreate(name) {
+  const ids = await certSetIndex();
+  if (ids.length >= SET_MAX) throw new Error(`Maximum ${SET_MAX} sets ho sakte hain — pehle koi purana set delete karo.`);
+  const id = Math.random().toString(36).slice(2, 7);
+  const meta = { id, name: String(name).replace(/\s+/g, ' ').trim().slice(0, 30) || 'Festival', created: Date.now(), from: null, to: null, tiers: {} };
+  await certSetPut(meta);
+  ids.push(id); await redisCommand(['SET', 'certset_index', JSON.stringify(ids)]);
+  return meta;
+}
+async function certSetDelete(id) {
+  for (const t of CERT_TIERS) { await redisCommand(['DEL', `certsettpl:${id}:${t}`]); await redisCommand(['DEL', `certsetlay:${id}:${t}`]); }
+  await redisCommand(['DEL', 'certset:' + id]);
+  await redisCommand(['SET', 'certset_index', JSON.stringify((await certSetIndex()).filter(x => x !== id))]);
+  if ((await redisCommand(['GET', 'certset_active'])) === id) await redisCommand(['DEL', 'certset_active']);
+  if ((await redisCommand(['GET', 'certset_base'])) === id) await redisCommand(['DEL', 'certset_base']);
+}
+async function certSetStoreTemplate(id, tier, jpegBuf) {
+  const meta = await certSetGet(id); if (!meta) throw new Error('Set nahi mila (delete ho gaya?)');
+  await redisCommand(['SET', `certsettpl:${id}:${tier}`, jpegBuf.toString('base64')]);
+  await redisCommand(['DEL', `certsetlay:${id}:${tier}`]); // new image -> let the right preset be chosen again
+  meta.tiers[tier] = true; await certSetPut(meta);
+}
+// Copies whatever is live right now into a set (used by "Save current as set" / "Overwrite from live").
+async function certSetSnapshotLive(id) {
+  const meta = await certSetGet(id); if (!meta) throw new Error('Set nahi mila');
+  for (const tier of CERT_TIERS) {
+    const info = await templateInfo(tier);
+    let buf = await currentTemplateBuffer(tier); if (!buf) continue;
+    if (buf.length > 640 * 1024) buf = (await prepareTemplate(buf)).buffer;
+    await redisCommand(['SET', `certsettpl:${id}:${tier}`, buf.toString('base64')]);
+    if (info.layoutSource === 'custom') await redisCommand(['SET', `certsetlay:${id}:${tier}`, JSON.stringify(info.layout)]);
+    else await redisCommand(['DEL', `certsetlay:${id}:${tier}`]);
+    meta.tiers[tier] = true;
+  }
+  await certSetPut(meta); return meta;
+}
+// Keeps the live card of a tier as "previous" (for the Undo button) before it gets replaced.
+async function stashPrevious(tier) {
+  try {
+    const info = await templateInfo(tier);
+    const prevBuf = await currentTemplateBuffer(tier);
+    if (!prevBuf) return;
+    const small = prevBuf.length <= 640 * 1024 ? prevBuf : (await prepareTemplate(prevBuf)).buffer;
+    await redisCommand(['SET', 'certtpl_prev:' + tier, small.toString('base64')]);
+    await redisCommand(['SET', 'certlayout_prev:' + tier, JSON.stringify(info.layout)]);
+  } catch (e) { console.warn('[cert] could not keep previous version:', e.message); }
+}
+async function certSetActivate(id) {
+  const meta = await certSetGet(id); if (!meta) throw new Error('Set nahi mila');
+  const applied = [];
+  for (const tier of CERT_TIERS) {
+    if (!meta.tiers[tier]) continue;
+    const tpl = await redisCommand(['GET', `certsettpl:${id}:${tier}`]); if (!tpl) continue;
+    await stashPrevious(tier);
+    await redisCommand(['SET', 'certtpl:' + tier, tpl]);
+    const lay = await redisCommand(['GET', `certsetlay:${id}:${tier}`]);
+    if (lay) await redisCommand(['SET', 'certlayout:' + tier, lay]); else await redisCommand(['DEL', 'certlayout:' + tier]);
+    applied.push(tier);
+  }
+  if (!applied.length) throw new Error('Is set me abhi koi card upload nahi hai.');
+  await redisCommand(['SET', 'certset_active', id]);
+  certCachesClear();
+  return { meta, applied };
+}
+async function certResetToDefault() { // live cards -> the files shipped in GitHub
+  for (const tier of CERT_TIERS) {
+    await stashPrevious(tier);
+    await redisCommand(['DEL', 'certtpl:' + tier]); await redisCommand(['DEL', 'certlayout:' + tier]);
+  }
+  await redisCommand(['DEL', 'certset_active']);
+  certCachesClear();
+}
+// Called after any edit of a live card: while a set is active, the set follows the live card.
+async function syncActiveSet(tier) {
+  try {
+    const id = await redisCommand(['GET', 'certset_active']); if (!id) return;
+    const meta = await certSetGet(id); if (!meta) return;
+    const tpl = await redisCommand(['GET', 'certtpl:' + tier]); if (!tpl) return;
+    await redisCommand(['SET', `certsettpl:${id}:${tier}`, tpl]);
+    const lay = await redisCommand(['GET', 'certlayout:' + tier]);
+    if (lay) await redisCommand(['SET', `certsetlay:${id}:${tier}`, lay]); else await redisCommand(['DEL', `certsetlay:${id}:${tier}`]);
+    if (!meta.tiers[tier]) { meta.tiers[tier] = true; await certSetPut(meta); }
+  } catch (e) { console.warn('[sets] sync failed:', e.message); }
+}
+
+// ---- Scheduler: switches sets on their start date and back when the festival is over ----
+// Only acts on a CHANGE of the wanted set (festival starts / ends), so a manual choice made in between is respected.
+async function runCertScheduler(now = Date.now()) {
+  const sets = await certSetList();
+  const due = sets.filter(x => x.from && x.to && x.from <= now && now <= x.to).sort((a, b) => b.from - a.from)[0] || null;
+  const desired = due ? due.id : null;
+  const lastRaw = await redisCommand(['GET', 'certset_sched_last']);
+  const last = lastRaw && lastRaw !== 'none' ? lastRaw : null;
+  if (desired === last) return null;
+  let note;
+  try {
+    if (due) {
+      await certSetActivate(due.id);
+      note = `🎆 <b>${esc(due.name)}</b> schedule ke hisaab se <b>LIVE</b> ho gaya (${fmtIst(due.from)} → ${fmtIst(due.to)}).`;
+    } else {
+      const baseId = await redisCommand(['GET', 'certset_base']);
+      const baseMeta = baseId ? await certSetGet(baseId).catch(() => null) : null;
+      if (baseMeta) { await certSetActivate(baseId); note = `🏁 Festival khatam. Normal set <b>${esc(baseMeta.name)}</b> wapas lag gaya.`; }
+      else { await certResetToDefault(); note = '🏁 Festival khatam. Cards wapas <b>GitHub default</b> par aa gaye.'; }
+    }
+  } catch (e) { note = `⚠️ Auto-switch fail hua: ${esc(e.message)}`; }
+  await redisCommand(['SET', 'certset_sched_last', desired || 'none']);
+  for (const oid of cbOwnerIds()) tgSendText(oid, note, { parse_mode: 'HTML' }).catch(() => {});
+  return note;
+}
+
+// ---- Screens ----
+async function sendPhotoGroup(chatId, items) {
+  if (items.length === 1) return sendCertificatePhoto(chatId, items[0].buffer, items[0].caption);
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('media', JSON.stringify(items.map((it, i) => ({ type: 'photo', media: 'attach://p' + i, caption: it.caption, parse_mode: 'HTML' }))));
+  items.forEach((it, i) => form.append('p' + i, it.buffer, { filename: `card${i}.jpg`, contentType: 'image/jpeg' }));
+  const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMediaGroup`, { method: 'POST', body: form, headers: form.getHeaders() });
+  return r.json();
+}
+async function certSetPreviews(chatId, meta, fromUser) {
+  const name = await certPreviewName(fromUser), items = [];
+  for (const tier of CERT_TIERS) {
+    if (!meta.tiers[tier]) continue;
+    const tpl = await redisCommand(['GET', `certsettpl:${meta.id}:${tier}`]); if (!tpl) continue;
+    const lay = await redisCommand(['GET', `certsetlay:${meta.id}:${tier}`]);
+    const t = CERT_META[tier].test;
+    const buffer = await renderCertificate({ name, totalDays: t.days, streak: t.streak, tier, issuedAt: Date.now(), templateBuffer: Buffer.from(tpl, 'base64'), layout: lay ? JSON.parse(lay) : null });
+    items.push({ buffer, caption: `${CERT_META[tier].icon} <b>${CERT_META[tier].label}</b> — ${esc(meta.name)}` });
+  }
+  if (!items.length) return false;
+  await sendPhotoGroup(chatId, items);
+  return true;
+}
+const setTiersLine = (meta) => CERT_TIERS.map(t => `${CERT_META[t].icon} ${meta.tiers[t] ? '✅' : '➖'}`).join('   ');
+const setBack = (to) => ({ inline_keyboard: [[{ text: '⬅️ Back', callback_data: to }]] });
+
+async function setListView() {
+  const sets = await certSetList();
+  const active = await redisCommand(['GET', 'certset_active']);
+  const base = await redisCommand(['GET', 'certset_base']);
+  const act = sets.find(s => s.id === active);
+  const lines = [
+    panelHeader('🎆', 'FESTIVAL SETS', 'Ek tap me teeno cards badlo — schedule se auto on/off'),
+    `▶️ Live set: <b>${act ? esc(act.name) : 'koi nahi (manual / GitHub default)'}</b>`,
+  ];
+  if (!sets.length) lines.push('', '<i>Abhi koi set nahi hai. ➕ New Set se teeno cards upload karo ya 📸 Save Current se abhi wale cards save karo.</i>');
+  const kb = sets.map(s => [{ text: `${s.id === active ? '✅ ' : ''}🎆 ${s.name}${s.from ? ' 📅' : ''}${s.id === base ? ' ⭐' : ''}`.slice(0, 60), callback_data: `panel:set:open:${s.id}` }]);
+  kb.push([{ text: '➕ New Set', callback_data: 'panel:set:new' }, { text: '📸 Save Current as Set', callback_data: 'panel:set:snap' }]);
+  kb.push([{ text: '🗂 Use GitHub Default', callback_data: 'panel:set:def' }, { text: '🧭 ChatGPT Prompt', callback_data: 'panel:set:prompt' }]);
+  kb.push([{ text: '⬅️ Back to Cards', callback_data: 'panel:s:cert' }]);
+  lines.push('', '<i>📅 = scheduled · ⭐ = Normal (festival ke baad wapas yahi lagta hai)</i>');
+  return { text: lines.join('\n'), kb: { inline_keyboard: kb } };
+}
+async function setScreenView(id) {
+  const meta = await certSetGet(id); if (!meta) return null;
+  const active = (await redisCommand(['GET', 'certset_active'])) === id;
+  const isBase = (await redisCommand(['GET', 'certset_base'])) === id;
+  const lines = [
+    panelHeader('🎆', esc(meta.name).toUpperCase(), active ? '✅ Abhi LIVE hai' : 'Festival set'),
+    `Cards: ${setTiersLine(meta)}`,
+    meta.from ? `📅 Schedule: <b>${fmtIst(meta.from)}</b> → <b>${fmtIst(meta.to)}</b> (auto on/off)` : '📅 Schedule: nahi lagaya',
+    `⭐ Normal set: ${isBase ? '<b>haan</b> — festival ke baad yahi wapas lagega' : 'nahi'}`,
+  ];
+  const kb = [
+    [{ text: active ? '▶️ Re-apply Now' : '▶️ Activate Now', callback_data: `panel:set:act:${id}` }, { text: '👁 Preview', callback_data: `panel:set:prev:${id}` }],
+    [{ text: '📅 Schedule', callback_data: `panel:set:sched:${id}` }, ...(meta.from ? [{ text: '🚫 Clear Schedule', callback_data: `panel:set:unsched:${id}` }] : [])],
+    [{ text: '📤 Upload / Replace Cards', callback_data: `panel:set:wiz:${id}` }, { text: '📸 Overwrite from Live', callback_data: `panel:set:snapc:${id}` }],
+    [{ text: isBase ? '⭐ Remove as Normal' : '⭐ Make Normal', callback_data: `panel:set:base:${id}` }, { text: '🗑 Delete', callback_data: `panel:set:del:${id}` }],
+    [{ text: '⬅️ All Sets', callback_data: 'panel:set:list' }],
+  ];
+  return { text: lines.join('\n'), kb: { inline_keyboard: kb } };
+}
+// Edits the tapped message into a screen (photo messages are replaced automatically by tgEdit).
+async function showView(cb, view) { await tgEdit(cb.message.chat.id, cb.message.message_id, view.text, view.kb, 'HTML'); }
+async function sendView(chatId, view) { return tgSendText(chatId, view.text, { parse_mode: 'HTML', reply_markup: view.kb }); }
+
+// ---- 3-card upload wizard ----
+function wizardKeyboard(id) {
+  return { inline_keyboard: [[{ text: '⏭ Skip', callback_data: `panel:set:skip:${id}` }, { text: '✅ Finish', callback_data: `panel:set:fin:${id}` }], [{ text: '❌ Cancel', callback_data: `panel:set:open:${id}` }]] };
+}
+async function wizardAsk(chatId, userId, meta, idx, prefix, editMessageId) {
+  if (idx >= CERT_TIERS.length) return wizardFinish(chatId, userId, meta.id);
+  const tier = CERT_TIERS[idx];
+  panelPending.set(userId, { action: `set_wiz:${meta.id}:${idx}`, ts: Date.now(), section: 'cert' });
+  const text = `${prefix ? prefix + '\n\n' : ''}🎆 <b>${esc(meta.name)}</b> — Step ${idx + 1}/${CERT_TIERS.length}\n\n${CERT_META[tier].icon} <b>${CERT_META[tier].label}</b> card ki blank template bhejo.\n📎 Best quality ke liye <b>File/Document</b> ki tarah bhejo.\n\n<i>Is card ko chhodna ho to ⏭ Skip dabao. Jitne upload karne the ho gaye to ✅ Finish.</i>`;
+  if (editMessageId) return tgEdit(chatId, editMessageId, text, wizardKeyboard(meta.id), 'HTML');
+  return tgSendText(chatId, text, { parse_mode: 'HTML', reply_markup: wizardKeyboard(meta.id) });
+}
+async function wizardFinish(chatId, userId, id, fromUser) {
+  panelPending.delete(userId);
+  const meta = await certSetGet(id); if (!meta) return;
+  const have = CERT_TIERS.filter(t => meta.tiers[t]);
+  if (!have.length) return tgSendText(chatId, '⚠️ Koi card upload nahi hua, set khali hai.', { reply_markup: setBack(`panel:set:open:${id}`) });
+  await certSetPreviews(chatId, meta, fromUser || { first_name: 'Admin', last_name: 'Supporter' });
+  return tgSendText(chatId, `✅ <b>${esc(meta.name)}</b> ready — ${setTiersLine(meta)}\nUpar preview dekho. Ab live karo ya schedule lagao 👇`, {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [[{ text: '▶️ Activate Now', callback_data: `panel:set:act:${id}` }, { text: '📅 Schedule', callback_data: `panel:set:sched:${id}` }], [{ text: '🎆 Open Set', callback_data: `panel:set:open:${id}` }]] }
+  });
+}
+
+function certPromptText() {
+  return [
+    'Use the attached image as the EXACT layout reference for a certificate card (16:9, 1280x720).',
+    'Create a new "[FESTIVAL NAME]" edition of this certificate: change only the colours, background art and festival decorations.',
+    'Keep all printed words exactly as they are (CHANNEL SUPPORT CENTER, CERTIFICATE OF SUPPORT, This certifies that, has proudly supported the channel as a ..., TOTAL DAYS, CURRENT STREAK, the tier name, VERIFIED SUPPORTER, the footer line).',
+    'The areas inside the three cyan dashed boxes (NAME, DAYS, STREAK) must stay completely EMPTY with a plain dark background - no text, numbers or decorations there.',
+    'Do NOT draw the cyan boxes or their labels. Keep every element in the same position and size.',
+  ].join('\n');
+}
+async function sendPromptMessage(chatId) {
+  return tgSendText(chatId, `🧭 <b>ChatGPT Prompt</b>\nPehle card ke menu se <b>🧭 Layout Guide</b> dabao (guide image milegi), use ChatGPT me attach karo aur ye prompt bhejo:\n\n<pre>${esc(certPromptText())}</pre>`, { parse_mode: 'HTML' });
+}
+
+async function handleSetCallback(cb, action) {
+  const chatId = cb.message.chat.id, userId = cb.from.id;
+  const [op, id] = String(action).split(':');
+  const needSet = async () => { const m = id ? await certSetGet(id).catch(() => null) : null; if (!m) { await showView(cb, await setListView()); return null; } return m; };
+  if (op !== 'skip') panelPending.delete(userId);
+
+  if (op === 'list') return showView(cb, await setListView());
+  if (op === 'open') { const v = await setScreenView(id); return showView(cb, v || await setListView()); }
+  if (op === 'prompt') return sendPromptMessage(chatId);
+
+  if (op === 'new' || op === 'snap') {
+    panelPending.set(userId, { action: op === 'new' ? 'set_new' : 'set_snap', ts: Date.now(), section: 'cert' });
+    const t = op === 'new'
+      ? '➕ <b>NEW SET</b>\n\nSet ka naam bhejo (jaise <code>Diwali 2026</code>). Uske baad bot teeno cards upload karwayega.'
+      : '📸 <b>SAVE CURRENT AS SET</b>\n\nAbhi live teeno cards ko save karne ke liye set ka naam bhejo (jaise <code>Normal</code>).';
+    return tgEdit(chatId, cb.message.message_id, t, setBack('panel:set:list'), 'HTML');
+  }
+  if (op === 'def') {
+    return tgEdit(chatId, cb.message.message_id, '⚠️ <b>GitHub Default lagayein?</b>\n\nLive teeno cards GitHub wali original files se replace ho jayenge.\nBot se upload kiye cards agar kisi set me save nahi hain to <i>↩️ Undo</i> se hi wapas aa sakte hain — pehle <b>📸 Save Current as Set</b> kar lo.',
+      { inline_keyboard: [[{ text: '✅ Haan, GitHub Default lagao', callback_data: 'panel:set:defc' }], [{ text: '❌ Cancel', callback_data: 'panel:set:list' }]] }, 'HTML');
+  }
+  if (op === 'defc') { await certResetToDefault(); return tgEdit(chatId, cb.message.message_id, '🗂 <b>Cards ab GitHub default par hain.</b>', { inline_keyboard: [[{ text: '🎆 Sets', callback_data: 'panel:set:list' }, { text: '🎖️ Cards', callback_data: 'panel:s:cert' }]] }, 'HTML'); }
+
+  const meta = await needSet(); if (!meta) return;
+  if (op === 'act') {
+    const r = await certSetActivate(id);
+    await tgEdit(chatId, cb.message.message_id, `▶️ <b>${esc(meta.name)}</b> ab <b>LIVE</b> hai!\nLive hue cards: ${r.applied.map(t => CERT_META[t].icon + ' ' + CERT_META[t].label).join(', ')}\n<i>Pehle wale cards ke liye har card me ↩️ Undo available hai.</i>`,
+      { inline_keyboard: [[{ text: '🎆 Open Set', callback_data: `panel:set:open:${id}` }, { text: '🎖️ Cards', callback_data: 'panel:s:cert' }]] }, 'HTML');
+    return certSetPreviews(chatId, meta, cb.from);
+  }
+  if (op === 'prev') {
+    const ok = await certSetPreviews(chatId, meta, cb.from);
+    if (!ok) await tgSendText(chatId, '⚠️ Is set me abhi koi card nahi hai.');
+    return;
+  }
+  if (op === 'sched') {
+    panelPending.set(userId, { action: 'set_sched:' + id, ts: Date.now(), section: 'cert' });
+    return tgEdit(chatId, cb.message.message_id, `📅 <b>SCHEDULE — ${esc(meta.name)}</b>\n\nStart aur end date bhejo (India dates, end date bhi shamil):\n<code>01-11-2026 to 10-11-2026</code>\nYa saal ke bina: <code>1/11 to 10/11</code>\n\nStart date par bot khud set live kar dega, end ke baad Normal / GitHub default wapas laga dega.`, setBack(`panel:set:open:${id}`), 'HTML');
+  }
+  if (op === 'unsched') { meta.from = null; meta.to = null; await certSetPut(meta); runCertScheduler().catch(() => {}); return showView(cb, await setScreenView(id)); }
+  if (op === 'wiz') return wizardAsk(chatId, userId, meta, 0, '', cb.message.message_id);
+  if (op === 'skip') {
+    const p = panelPending.get(userId); const m = p && /^set_wiz:([^:]+):(\d+)$/.exec(p.action);
+    if (!m || m[1] !== id) return wizardAsk(chatId, userId, meta, 0, '', cb.message.message_id);
+    return wizardAsk(chatId, userId, meta, Number(m[2]) + 1, `⏭ ${CERT_META[CERT_TIERS[Number(m[2])]].label} skip kiya.`);
+  }
+  if (op === 'fin') return wizardFinish(chatId, userId, id, cb.from);
+  if (op === 'snapc') {
+    await certSetSnapshotLive(id);
+    return showView(cb, Object.assign(await setScreenView(id), {}));
+  }
+  if (op === 'base') {
+    const cur = await redisCommand(['GET', 'certset_base']);
+    if (cur === id) await redisCommand(['DEL', 'certset_base']); else await redisCommand(['SET', 'certset_base', id]);
+    return showView(cb, await setScreenView(id));
+  }
+  if (op === 'del') {
+    return tgEdit(chatId, cb.message.message_id, `🗑 <b>${esc(meta.name)}</b> delete karein?\nSet ke saved cards hamesha ke liye hat jayenge (live cards nahi badlenge).`,
+      { inline_keyboard: [[{ text: '✅ Haan, delete', callback_data: `panel:set:delc:${id}` }], [{ text: '❌ Cancel', callback_data: `panel:set:open:${id}` }]] }, 'HTML');
+  }
+  if (op === 'delc') { await certSetDelete(id); return showView(cb, await setListView()); }
+}
+
+// Text / image answers while a Festival Sets prompt is waiting. Returns true if handled.
+async function handleSetPending(msg, action, userId) {
+  const chatId = msg.chat.id;
+  const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+  try {
+    if (action === 'set_new' || action === 'set_snap') {
+      if (!text) { await tgSendText(chatId, '⚠️ Set ka naam text me bhejo.'); return true; }
+      panelPending.delete(userId);
+      const meta = await certSetCreate(text);
+      if (action === 'set_snap') {
+        await certSetSnapshotLive(meta.id);
+        await sendView(chatId, await setScreenView(meta.id));
+      } else await wizardAsk(chatId, userId, meta, 0, `✅ Set <b>${esc(meta.name)}</b> ban gaya.`);
+      return true;
+    }
+    if (action.startsWith('set_sched:')) {
+      const id = action.split(':')[1];
+      const sch = parseSchedule(text);
+      if (!sch) { await tgSendText(chatId, '⚠️ Date samajh nahi aayi. Aise bhejo: <code>01-11-2026 to 10-11-2026</code>', { parse_mode: 'HTML' }); return true; }
+      panelPending.delete(userId);
+      const meta = await certSetGet(id); if (!meta) { await tgSendText(chatId, '⚠️ Set nahi mila.'); return true; }
+      meta.from = sch.from; meta.to = sch.to; await certSetPut(meta);
+      await runCertScheduler().catch(e => console.warn('[sets] scheduler:', e.message));
+      await sendView(chatId, await setScreenView(id));
+      return true;
+    }
+    const w = /^set_wiz:([^:]+):(\d+)$/.exec(action);
+    if (w) {
+      const id = w[1], idx = Number(w[2]), tier = CERT_TIERS[idx];
+      const meta = await certSetGet(id); if (!meta) { panelPending.delete(userId); return false; }
+      const doc = msg.document && (/^image\//i.test(msg.document.mime_type || '') || /\.(png|jpe?g|webp)$/i.test(msg.document.file_name || '')) ? msg.document : null;
+      const media = msg.photo ? msg.photo[msg.photo.length - 1] : doc;
+      if (!media) { await tgSendText(chatId, `⚠️ ${CERT_META[tier].label} card ki <b>image</b> bhejo (ya ⏭ Skip / ✅ Finish).`, { parse_mode: 'HTML', reply_markup: wizardKeyboard(id) }); return true; }
+      const prep = await prepareTemplate(await downloadTelegramFile(media.file_id));
+      await certSetStoreTemplate(id, tier, prep.buffer);
+      await wizardAsk(chatId, userId, meta, idx + 1, `✅ ${CERT_META[tier].label} mil gaya (<code>${prep.width}×${prep.height}</code>).`);
+      return true;
+    }
+  } catch (e) {
+    console.error('[sets] input failed:', e.message);
+    await tgSendText(chatId, `❌ ${esc(e.message)}`, { parse_mode: 'HTML' });
+    return true;
+  }
+  return false;
 }
 
 async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
@@ -1834,12 +2204,26 @@ async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
     return;
   }
 
+  if (action.startsWith('cert_guide:')) {
+    const tier = action.split(':')[1];
+    if (!CERT_TIERS.includes(tier)) return;
+    try {
+      const t = CERT_META[tier].test;
+      const img = await renderCertificate({ name: 'Name Here', totalDays: t.days, streak: t.streak, tier, issuedAt: Date.now(), highlight: 'all', guideOnly: true });
+      await sendCertificatePhoto(chatId, img, `🧭 <b>Layout Guide — ${CERT_META[tier].label}</b>\nCyan boxes = jahan bot text likhega. Is image ko ChatGPT me reference ke taur par attach karo.`,
+        { inline_keyboard: [[{ text: '⬅️ Back to Card', callback_data: `panel:s:cert_${tier}` }]] });
+      await sendPromptMessage(chatId);
+    } catch (e) { await tgSendText(chatId, `❌ Guide ban nahi paya: ${esc(e.message)}`, { parse_mode: 'HTML' }); }
+    return;
+  }
+
   if (action.startsWith('cert_pkg:')) {
     // Drops the bot-uploaded template + layout so the card goes back to the file shipped in GitHub (assets/cert/<tier>.png).
     const tier = action.split(':')[1];
     if (!CERT_TIERS.includes(tier)) return;
     try {
       for (const k of ['certtpl:', 'certlayout:', 'certtpl_prev:', 'certlayout_prev:']) await redisCommand(['DEL', k + tier]);
+      await redisCommand(['DEL', 'certset_active']);
       certCachesClear(tier);
       await sendCardPreview(chatId, tier, fromUser, `🗂 <b>${CERT_META[tier].label} card ab GitHub wali file se chal raha hai.</b>\n\nBot se upload kiya hua template hata diya gaya.`,
         { inline_keyboard: [[{ text: '📐 Adjust Text', callback_data: `panel:lay:${tier}:name:sel:1` }], [{ text: '⬅️ Back to Card', callback_data: `panel:s:cert_${tier}` }]] });
@@ -2042,6 +2426,12 @@ async function handlePanelCallback(cb) {
     return;
   }
 
+  if (kind === 'set') {
+    try { await handleSetCallback(cb, action); }
+    catch (e) { console.error('[sets] failed:', e.message); await tgSendText(chatId, `❌ ${esc(e.message)}`, { parse_mode: 'HTML' }); }
+    return;
+  }
+
   if (kind === 'lay') {
     panelPending.delete(userId);
     try { await handleLayoutCallback(cb, action); }
@@ -2087,6 +2477,9 @@ async function handlePanelPendingInput(msg) {
 
   // A slash command (/panel, /start, ...) always cancels the waiting prompt instead of being swallowed as its answer.
   if (typeof msg.text === 'string' && msg.text.trim().startsWith('/')) { panelPending.delete(userId); return false; }
+
+  // Festival Sets prompts (new set name, schedule dates, 3-card wizard)
+  if (action.startsWith('set_')) return handleSetPending(msg, action, userId);
 
   // Case 1: Certificate Template Upload
   if (action.startsWith('upload_cert:')) {
@@ -3395,4 +3788,9 @@ async function setupBotCommands() {
 app.listen(PORT, () => {
   console.log(`Support backend listening on port ${PORT}`);
   setTimeout(() => setupBotCommands().catch(e => console.warn('[commands] setup skipped:', e.message)), 4000);
+  setTimeout(() => runCertScheduler().catch(e => console.warn('[sets] scheduler:', e.message)), 8000);
+  setInterval(() => runCertScheduler().catch(e => console.warn('[sets] scheduler:', e.message)), 10 * 60 * 1000).unref();
 });
+
+
+module.exports = Object.assign(module.exports || {}, { runCertScheduler, parseSchedule });

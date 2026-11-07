@@ -176,6 +176,12 @@ async function prepareTemplate(buffer) {
   return { buffer: out, width: w, height: h, aspect: w / h };
 }
 
+// Size + resolved layout of ANY template buffer (drafts, history entries) without touching the live cache.
+async function inspectTemplate(buffer, layout, tier) {
+  const img = await safeLoadImage(buffer);
+  return { width: img.width, height: img.height, layout: sanitizeLayout(layout, tier, img.width, img.height) };
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function tierForDays(totalDays) {
   const d = Number(totalDays) || 0;
@@ -287,5 +293,5 @@ async function renderCertificate(opts) {
 
 module.exports = {
   renderCertificate, tierForDays, cleanName, clearTemplateCache,
-  setProviders, templateInfo, prepareTemplate, defaultLayout, sanitizeLayout, TIERS,
+  setProviders, templateInfo, prepareTemplate, defaultLayout, sanitizeLayout, TIERS, inspectTemplate, looksLikeImage,
 };

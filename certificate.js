@@ -230,7 +230,7 @@ function smallText(ctx, text, x, base, size, maxW, color) {
   ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 4; ctx.fillStyle = color; ctx.fillText(text, x, base); ctx.restore();
 }
 // Calibration helper: thin cyan box + centre cross around the field being nudged (only in "Adjust layout" previews).
-function drawGuide(ctx, f, W, H) {
+function drawGuide(ctx, f, W, H, label) {
   const cx = f.cx * W, base = f.base * H, size = f.size * H, mw = f.maxW * W;
   ctx.save();
   ctx.strokeStyle = 'rgba(0,255,255,0.95)'; ctx.lineWidth = Math.max(1.5, W / 700); ctx.setLineDash([6, 4]);
@@ -238,6 +238,12 @@ function drawGuide(ctx, f, W, H) {
   ctx.setLineDash([]);
   const r = Math.max(5, W / 160);
   ctx.beginPath(); ctx.moveTo(cx - r, base); ctx.lineTo(cx + r, base); ctx.moveTo(cx, base - r); ctx.lineTo(cx, base + r); ctx.stroke();
+  if (label) {
+    const fs = Math.max(12, Math.round(W / 70));
+    ctx.font = `bold ${fs}px ${TEXT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(0,255,255,1)'; ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
+    ctx.fillText(label, cx, base - size * 0.78 + (size * 0.95) / 2 + fs * 0.35); // centred inside the box
+  }
   ctx.restore();
 }
 
@@ -250,22 +256,31 @@ async function renderCertificate(opts) {
   const totalDays = Math.max(0, parseInt(opts.totalDays, 10) || 0);
   const streak = Math.max(0, parseInt(opts.streak, 10) || 0);
   const tier = STYLE[opts.tier] ? opts.tier : tierForDays(totalDays);
-  const T = await getTemplate(tier);
+  // opts.templateBuffer / opts.layout render a card that is NOT live (used for Festival Set previews)
+  let T;
+  if (opts.templateBuffer) {
+    const img = await safeLoadImage(opts.templateBuffer);
+    T = { img, w: img.width, h: img.height, layout: sanitizeLayout(opts.layout, tier, img.width, img.height) };
+  } else T = await getTemplate(tier);
   const W = T.w, H = T.h, lay = T.layout, S = styleFor(tier, lay);
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(T.img, 0, 0);
 
   const field = (f) => [f.cx * W, f.base * H, f.size * H, f.maxW * W];
-  metalText(ctx, cleanName(opts.name), ...field(lay.name), S);
-  metalText(ctx, String(totalDays), ...field(lay.days), S);
-  metalText(ctx, String(streak), ...field(lay.streak), S);
-  if (lay.date && lay.cid) {
+  if (!opts.guideOnly) { // guideOnly = empty template + labelled boxes (reference image for ChatGPT)
+    metalText(ctx, cleanName(opts.name), ...field(lay.name), S);
+    metalText(ctx, String(totalDays), ...field(lay.days), S);
+    metalText(ctx, String(streak), ...field(lay.streak), S);
+  }
+  if (!opts.guideOnly && lay.date && lay.cid) {
     const small = lay.small * H;
     smallText(ctx, 'Issued: ' + istDateStr(opts.issuedAt), lay.date.x * W, lay.date.base * H, small, lay.date.maxW * W, S.small_color);
     smallText(ctx, 'Certificate ID: ' + certId(opts.rawName != null ? opts.rawName : opts.name, totalDays, opts.firstSupportAt), lay.cid.x * W, lay.cid.base * H, small, lay.cid.maxW * W, S.small_color);
   }
-  if (opts.highlight && lay[opts.highlight]) drawGuide(ctx, lay[opts.highlight], W, H);
+  if (opts.highlight === 'all') {
+    drawGuide(ctx, lay.name, W, H, 'NAME'); drawGuide(ctx, lay.days, W, H, 'DAYS'); drawGuide(ctx, lay.streak, W, H, 'STREAK');
+  } else if (opts.highlight && lay[opts.highlight]) drawGuide(ctx, lay[opts.highlight], W, H);
 
   return opts.format === 'png' ? canvas.encode('png') : canvas.encode('jpeg', 94);
 }

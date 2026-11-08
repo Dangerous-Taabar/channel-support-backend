@@ -40,7 +40,7 @@ module.exports = function createStoreRouter(redis) {
   const reqs = new Map(); //      id -> request
   const imgs = new Map(); //      id -> { mime, buf }
   const rate = new Map(); //      key -> [timestamps]
-  let meta = { forwardBot: "", admins: [], rebuy: true }; // admins: Telegram ids the Forward Bot says may edit the store (synced)
+  let meta = { forwardBot: "", admins: [], rebuy: true, logo: "" }; // admins: Telegram ids the Forward Bot says may edit the store (synced)
   const ENV_ADMINS = new Set(String(process.env.STORE_ADMINS || "").split(/[,\s]+/).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0));
   const isAdmin = (uid) => ENV_ADMINS.has(uid) || (Array.isArray(meta.admins) && meta.admins.includes(uid));
   let ready = false;
@@ -250,12 +250,82 @@ module.exports = function createStoreRouter(redis) {
     const u = req.user;
     const lv = await libView(u.id), adm = isAdmin(u.id);
     res.json({
-      user: { id: u.id, name: u.name },
+      user: { id: u.id, name: u.name, username: u.username || null },
+      logo: meta.logo || "",
       apps: [...apps.values()].filter((a) => adm || !hiddenOf(a)).map(adm ? pubAdmin : pub),
       owned: lv.owned, exp: lv.exp, past: lv.past, rebuy: meta.rebuy !== false, isAdmin: adm,
       balance: balances.get(u.id) || null,
       forwardBot: meta.forwardBot || "",
       now: now(),
+    });
+  }));
+
+  // ---------------------------------------------------------------------------------------------
+  // Store logo (the Forward Bot sends the Vault channel's picture, or the owner's /storelogo) and the user's own avatar
+  // ---------------------------------------------------------------------------------------------
+  let logoImg = null; // { mime, buf }
+  async function loadLogo() {
+    if (logoImg) return logoImg;
+    const raw = await R("GET", "store:logo");
+    if (!raw) return null;
+    const i = raw.indexOf(",");
+    logoImg = { mime: raw.slice(0, i) || "image/jpeg", buf: Buffer.from(raw.slice(i + 1), "base64") };
+    return logoImg;
+  }
+  router.get("/logo", wrap(async (req, res) => {
+    const im = await loadLogo();
+    if (!im) return res.status(404).end();
+    res.set({ "Content-Type": im.mime, "Cache-Control": "public, max-age=604800, immutable", "Access-Control-Allow-Origin": "*", "Cross-Origin-Resource-Policy": "cross-origin" });
+    res.send(im.buf);
+  }));
+  router.post("/bot/logo", botAuth, wrap(async (req, res) => {
+    await booting;
+    const mime = String(req.body?.mime || ""), sig = String(req.body?.sig || "").replace(/[^\w:.-]/g, "").slice(0, 60);
+    const buf = Buffer.from(String(req.body?.b64 || ""), "base64");
+    if (!IMG_OK[mime] || !buf.length || buf.length > 400_000 || !IMG_OK[mime](buf) || !sig) throw bad(400, "Bad logo");
+    logoImg = { mime, buf };
+    await R("SET", "store:logo", mime + "," + buf.toString("base64"));
+    meta = { ...meta, logo: sig }; R("SET", "store:meta", JSON.stringify(meta));
+    res.json({ ok: true });
+  }));
+
+  const avatars = new Map(); // uid -> { mime, buf, at } | { none: true, at }
+  async function fetchAvatar(uid) {
+    const api = (m, q) => fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${m}?${q}`).then((r) => r.json());
+    try {
+      const j = await api("getUserProfilePhotos", `user_id=${uid}&limit=1`);
+      const sizes = j.ok && j.result.photos && j.result.photos[0];
+      if (!sizes) return { none: true, at: now() };
+      const pick = sizes.find((x) => x.width >= 160) || sizes[sizes.length - 1];
+      const f = await api("getFile", "file_id=" + encodeURIComponent(pick.file_id));
+      if (!f.ok) return { none: true, at: now() };
+      const r = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${f.result.file_path}`);
+      const buf = Buffer.from(await r.arrayBuffer());
+      return buf.length && buf.length < 600_000 ? { mime: "image/jpeg", buf, at: now() } : { none: true, at: now() };
+    } catch { return { none: true, at: now() - 5 * 3600_000 }; } // network trouble: try again in ~1 h
+  }
+  router.get("/me/avatar", userAuth, wrap(async (req, res) => {
+    if (!limit(req, res, "avatar", 30, 60_000)) return;
+    const uid = req.user.id;
+    let c = avatars.get(uid);
+    if (!c || now() - c.at > 6 * 3600_000) {
+      c = await fetchAvatar(uid);
+      avatars.set(uid, c);
+      if (avatars.size > 2000) avatars.delete(avatars.keys().next().value);
+    }
+    if (c.none) return res.status(404).json({ error: "No photo" });
+    res.set({ "Content-Type": c.mime, "Cache-Control": "private, max-age=3600" });
+    res.send(c.buf);
+  }));
+
+  // the person's own purchases (newest first)
+  router.get("/history", userAuth, wrap(async (req, res) => {
+    const uid = req.user.id, DONE = new Set(["paid", "delivered", "needs_start", "delivery_failed"]);
+    const list = [...orders.values()].filter((o) => o.uid === uid && DONE.has(o.status) && o.kind !== "redownload").sort((a, b) => b.createdAt - a.createdAt);
+    res.json({
+      history: list.slice(0, 30).map((o) => ({ id: o.id, appId: o.appId, name: o.appName, price: o.price, kind: o.kind, status: o.status, at: o.createdAt })),
+      spent: list.filter((o) => o.kind === "buy").reduce((t, o) => t + (o.price || 0), 0),
+      count: list.length,
     });
   }));
 

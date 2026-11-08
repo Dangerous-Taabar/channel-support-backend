@@ -33,14 +33,16 @@ module.exports = function createStoreRouter(redis) {
   // ---------------------------------------------------------------------------------------------
   const apps = new Map(); //      id -> app record
   const downloads = new Map(); // id -> count
-  const libs = new Map(); //      uid -> Set(appId)
+  const libs = new Map(); //      uid -> Map(appId -> { at, exp, rev })   exp 0 = never expires
   const orders = new Map(); //    id -> order
   const balances = new Map(); //  uid -> { coins, wallet, at }
   const balReq = new Map(); //    uid -> { at, sentAt }
   const reqs = new Map(); //      id -> request
   const imgs = new Map(); //      id -> { mime, buf }
   const rate = new Map(); //      key -> [timestamps]
-  let meta = { forwardBot: "" };
+  let meta = { forwardBot: "", admins: [], rebuy: true }; // admins: Telegram ids the Forward Bot says may edit the store (synced)
+  const ENV_ADMINS = new Set(String(process.env.STORE_ADMINS || "").split(/[,\s]+/).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0));
+  const isAdmin = (uid) => ENV_ADMINS.has(uid) || (Array.isArray(meta.admins) && meta.admins.includes(uid));
   let ready = false;
 
   const now = () => Date.now();
@@ -54,7 +56,7 @@ module.exports = function createStoreRouter(redis) {
       const ids = (await redis(["SMEMBERS", "store:apps"])) || [];
       if (ids.length) {
         const vals = (await redis(["MGET", ...ids.map((i) => "store:app:" + i)])) || [];
-        vals.forEach((v) => { try { const a = JSON.parse(v); if (a && a.id) apps.set(a.id, a); } catch {} });
+        vals.forEach((v) => { try { const a = JSON.parse(v); if (a && a.id) { if (a.off === undefined) a.off = !!a.hidden; delete a.hidden; apps.set(a.id, a); } } catch {} });
       }
       const m = await redis(["GET", "store:meta"]);
       if (m) meta = { ...meta, ...JSON.parse(m) };
@@ -82,13 +84,19 @@ module.exports = function createStoreRouter(redis) {
   const booting = init();
 
   async function lib(uid) {
-    let s = libs.get(uid);
-    if (!s) {
-      const m = (await R("SMEMBERS", "store:lib:" + uid)) || [];
-      s = libs.get(uid) || new Set(m);
-      libs.set(uid, s);
+    let m = libs.get(uid);
+    if (!m) {
+      const old = (await R("SMEMBERS", "store:lib:" + uid)) || [];
+      const hx = (await R("HGETALL", "store:libx:" + uid)) || [];
+      m = libs.get(uid);
+      if (!m) {
+        m = new Map();
+        for (const id of old) m.set(id, { at: 0, exp: 0, rev: 0 }); // bought before expiry existed: valid until the app's next update
+        for (let i = 0; i + 1 < hx.length; i += 2) { try { m.set(hx[i], JSON.parse(hx[i + 1])); } catch {} }
+        libs.set(uid, m);
+      }
     }
-    return s;
+    return m;
   }
 
   const OPEN = new Set(["pending", "paid", "needs_start"]);
@@ -187,7 +195,36 @@ module.exports = function createStoreRouter(redis) {
   // ---------------------------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------------------------
-  const pub = (a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", desc: a.desc || "", price: a.price, added: a.added || "", dl: downloads.get(a.id) || 0, img: a.imgv ? a.imgv : 0 });
+  const hiddenOf = (a) => !!(a.off || (a.ovr && a.ovr.hidden)); // off = the Forward Bot dropped it, ovr.hidden = an admin hid it
+  const effPrice = (a) => (a.ovr && a.ovr.price != null ? a.ovr.price : a.price);
+  const effDays = (a) => (a.ovr && a.ovr.days != null ? a.ovr.days : a.days || 0);
+  const pub = (a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", desc: a.desc || "", price: effPrice(a), days: effDays(a), added: a.added || "", dl: downloads.get(a.id) || 0, img: a.imgv ? a.imgv : 0 });
+  const pubAdmin = (a) => ({ ...pub(a), adm: { hidden: hiddenOf(a), off: !!a.off, custom: !!a.customImg, ovr: a.ovr || {} } });
+
+  // a library entry is "active", or why it is not: "expired" (time ran out) / "outdated" (a new version came out and re-buy is on)
+  function entState(e, a) {
+    if (!e) return null;
+    if (e.exp && e.exp <= now()) return "expired";
+    if (meta.rebuy !== false && (e.rev || 0) < (a.rev || 0)) return "outdated";
+    return "active";
+  }
+  async function libView(uid) {
+    const m = await lib(uid), owned = [], exp = {}, past = {};
+    for (const [id, e] of m) {
+      const a = apps.get(id); if (!a) continue;
+      const st = entState(e, a);
+      if (st === "active") { owned.push(id); if (e.exp) exp[id] = e.exp; } else past[id] = st;
+    }
+    return { owned, exp, past };
+  }
+  function applyOvr(a, p) { // price / days / hidden: a value sets it, null clears it (back to what the Forward Bot says)
+    const o = { ...(a.ovr || {}) };
+    if ("price" in p) { if (p.price === null) delete o.price; else { const n = Math.floor(Number(p.price)); if (!(n >= 0 && n <= 100000)) throw bad(400, "Price must be 0 - 100000"); o.price = n; } }
+    if ("days" in p) { if (p.days === null) delete o.days; else { const n = Math.floor(Number(p.days)); if (!(n >= 0 && n <= 3650)) throw bad(400, "Days must be 0 - 3650 (0 = lifetime)"); o.days = n; } }
+    if ("hidden" in p) { if (p.hidden === null || p.hidden === false) delete o.hidden; else o.hidden = true; }
+    if (Object.keys(o).length) a.ovr = o; else delete a.ovr;
+  }
+  const IMG_OK = { "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8, "image/png": (b) => b[0] === 0x89 && b[1] === 0x50, "image/webp": (b) => b.slice(0, 4).toString() === "RIFF" && b.slice(8, 12).toString() === "WEBP" };
   const pubOrder = (o) => ({ id: o.id, status: o.status, reason: o.reason || null, appId: o.appId, appName: o.appName, price: o.price, kind: o.kind, forwardBot: meta.forwardBot || "" });
   const cleanDesc = (s, max) => String(s ?? "").replace(/[\u0000-\u0009\u000b-\u001f\u007f<>]/g, " ").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim().slice(0, max);
   const cleanText = (s, max) => String(s ?? "").replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
@@ -197,7 +234,9 @@ module.exports = function createStoreRouter(redis) {
     if (o.kind !== "redownload") {
       downloads.set(o.appId, (downloads.get(o.appId) || 0) + 1);
       R("HINCRBY", "store:dl", o.appId, 1);
-      lib(o.uid).then((s) => { s.add(o.appId); R("SADD", "store:lib:" + o.uid, o.appId); });
+      const a = apps.get(o.appId), days = a ? effDays(a) : 0;
+      const e = { at: now(), exp: o.kind === "buy" && days > 0 ? now() + days * 86400_000 : 0, rev: a ? a.rev || 0 : 0 };
+      lib(o.uid).then((m) => { m.set(o.appId, e); R("HSET", "store:libx:" + o.uid, o.appId, JSON.stringify(e)); R("SREM", "store:lib:" + o.uid, o.appId); });
     }
     wake("fwd");
   }
@@ -209,11 +248,11 @@ module.exports = function createStoreRouter(redis) {
 
   router.get("/bootstrap", userAuth, wrap(async (req, res) => {
     const u = req.user;
-    const owned = [...(await lib(u.id))];
+    const lv = await libView(u.id), adm = isAdmin(u.id);
     res.json({
       user: { id: u.id, name: u.name },
-      apps: [...apps.values()].filter((a) => !a.hidden).map(pub),
-      owned,
+      apps: [...apps.values()].filter((a) => adm || !hiddenOf(a)).map(adm ? pubAdmin : pub),
+      owned: lv.owned, exp: lv.exp, past: lv.past, rebuy: meta.rebuy !== false, isAdmin: adm,
       balance: balances.get(u.id) || null,
       forwardBot: meta.forwardBot || "",
       now: now(),
@@ -221,7 +260,8 @@ module.exports = function createStoreRouter(redis) {
   }));
 
   router.get("/me", userAuth, wrap(async (req, res) => {
-    res.json({ owned: [...(await lib(req.user.id))], balance: balances.get(req.user.id) || null, now: now() });
+    const lv = await libView(req.user.id);
+    res.json({ owned: lv.owned, exp: lv.exp, past: lv.past, balance: balances.get(req.user.id) || null, now: now() });
   }));
 
   // posters (no auth: an <img> tag cannot send headers; the id is not a secret)
@@ -253,15 +293,15 @@ module.exports = function createStoreRouter(redis) {
   router.post("/order", userAuth, wrap(async (req, res) => {
     const u = req.user;
     const app = apps.get(String(req.body?.appId || ""));
-    if (!app || app.hidden) throw bad(404, "This app is not in the store any more.");
+    if (!app || hiddenOf(app)) throw bad(404, "This app is not in the store any more.");
     // the same person tapping twice gets the same order back
     for (const o of orders.values()) if (o.uid === u.id && o.appId === app.id && (OPEN.has(o.status))) return res.json(pubOrder(o));
     if (!limit(req, res, "order", 15, 3600_000)) return;
-    const owned = (await lib(u.id)).has(app.id);
-    const free = app.price === 0;
+    const owned = entState((await lib(u.id)).get(app.id), app) === "active";
+    const price = effPrice(app), free = price === 0;
     const o = {
       id: rid(8), uid: u.id, name: u.name, username: u.username, appId: app.id, appName: app.name,
-      price: owned || free ? 0 : app.price, kind: owned ? "redownload" : free ? "free" : "buy",
+      price: owned || free ? 0 : price, kind: owned ? "redownload" : free ? "free" : "buy",
       status: owned || free ? "paid" : "pending", attempts: 0, createdAt: now(), updatedAt: now(), lockUntil: 0,
     };
     orders.set(o.id, o);
@@ -324,11 +364,13 @@ module.exports = function createStoreRouter(redis) {
   const CATS = new Set(["phone", "tv", "live_tv"]);
   router.post("/bot/apps/sync", botAuth, wrap(async (req, res) => {
     await booting;
-    const b = req.body || {};
-    if (b.meta && typeof b.meta.forwardBot === "string") {
-      const fb = b.meta.forwardBot.replace(/^@/, "").slice(0, 64);
-      if (fb && fb !== meta.forwardBot) { meta = { ...meta, forwardBot: fb }; R("SET", "store:meta", JSON.stringify(meta)); }
-    }
+    const b = req.body || {}, m = b.meta || {};
+    const nm = { ...meta };
+    if (typeof m.forwardBot === "string") { const fb = m.forwardBot.replace(/^@/, "").slice(0, 64); if (fb) nm.forwardBot = fb; }
+    if (Array.isArray(m.admins)) nm.admins = [...new Set(m.admins.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))].slice(0, 20);
+    if (typeof m.rebuy === "boolean") nm.rebuy = m.rebuy;
+    if (JSON.stringify(nm) !== JSON.stringify(meta)) { meta = nm; R("SET", "store:meta", JSON.stringify(meta)); }
+    const int = (v, max) => Math.min(max, Math.max(0, Math.floor(Number(v) || 0)));
     let n = 0;
     for (const x of Array.isArray(b.apps) ? b.apps : []) {
       if (!/^[PF]\d{1,9}$/.test(String(x.id))) continue;
@@ -339,20 +381,25 @@ module.exports = function createStoreRouter(redis) {
         category: CATS.has(x.category) ? x.category : "phone",
         version: cleanText(x.version, 20),
         desc: cleanDesc(x.desc, 600),
-        price: Math.min(100000, Math.max(0, Math.floor(Number(x.price) || 0))),
+        price: int(x.price, 100000),
+        days: int(x.days, 3650),
+        rev: int(x.rev, 1_000_000),
         added: cleanText(x.added, 30),
-        hidden: false,
+        off: false,
       };
+      delete a.hidden;
       apps.set(a.id, a); saveApp(a); n++;
     }
     if (Array.isArray(b.allIds)) {
       const keep = new Set(b.allIds.map(String));
       for (const a of apps.values()) {
-        const shouldHide = !keep.has(a.id);
-        if (a.hidden !== shouldHide) { a.hidden = shouldHide; saveApp(a); }
+        const off = !keep.has(a.id);
+        if (!!a.off !== off) { a.off = off; saveApp(a); }
       }
     }
-    res.json({ ok: true, upserted: n, total: apps.size });
+    // apps that are shown but have no poster stored (never uploaded, or an admin reset it): the Forward Bot sends its own
+    const needImg = [...apps.values()].filter((a) => !a.off && !a.imgv).map((a) => a.id);
+    res.json({ ok: true, upserted: n, total: apps.size, needImg });
   }));
 
   router.post("/bot/apps/:id/img", botAuth, wrap(async (req, res) => {
@@ -360,6 +407,7 @@ module.exports = function createStoreRouter(redis) {
     const id = String(req.params.id);
     const a = apps.get(id);
     if (!a) throw bad(404, "Unknown app - sync the app first");
+    if (a.customImg) return res.json({ ok: true, skipped: true }); // an admin set this poster in the store; the vault poster does not overwrite it
     const b64 = String(req.body?.b64 || "");
     const mime = /^image\/(jpeg|png|webp)$/.test(req.body?.mime) ? req.body.mime : "image/jpeg";
     const buf = Buffer.from(b64, "base64");
@@ -368,6 +416,53 @@ module.exports = function createStoreRouter(redis) {
     await R("SET", "store:img:" + id, mime + "," + b64);
     a.imgv = now(); saveApp(a);
     res.json({ ok: true, bytes: buf.length });
+  }));
+
+  // Forward Bot: what the store really shows (price / days after admin edits) - for /storelist; and clear an admin's edit
+  router.get("/bot/apps", botAuth, wrap(async (req, res) => {
+    await booting;
+    res.json({ apps: [...apps.values()].map((a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", price: effPrice(a), days: effDays(a), rev: a.rev || 0, hidden: hiddenOf(a), off: !!a.off, ovr: a.ovr || {}, custom: !!a.customImg, img: !!a.imgv, dl: downloads.get(a.id) || 0 })) });
+  }));
+  router.post("/bot/apps/:id/ovr", botAuth, wrap(async (req, res) => {
+    await booting;
+    const a = apps.get(String(req.params.id));
+    if (!a) throw bad(404, "Unknown app");
+    applyOvr(a, req.body || {}); saveApp(a);
+    res.json({ ok: true, app: pubAdmin(a) });
+  }));
+
+  // ---------------------------------------------------------------------------------------------
+  // Admin edit mode (Mini App, only for ids the Forward Bot lists as store admins, or STORE_ADMINS on the server)
+  // ---------------------------------------------------------------------------------------------
+  const adminOnly = (req, res, next) => (isAdmin(req.user.id) ? next() : res.status(403).json({ error: "Admins only" }));
+  router.post("/admin/app/:id", userAuth, adminOnly, wrap(async (req, res) => {
+    if (!limit(req, res, "adm", 60, 60_000)) return;
+    const a = apps.get(String(req.params.id));
+    if (!a) throw bad(404, "Unknown app");
+    const b = req.body || {}, p = {};
+    for (const k of ["price", "days", "hidden"]) if (k in b) p[k] = b[k];
+    applyOvr(a, p); saveApp(a);
+    console.log(`[store] admin ${req.user.id} edited ${a.id}:`, JSON.stringify(p));
+    res.json({ ok: true, app: pubAdmin(a) });
+  }));
+  router.post("/admin/app/:id/img", userAuth, adminOnly, wrap(async (req, res) => {
+    if (!limit(req, res, "admimg", 20, 60_000)) return;
+    const id = String(req.params.id), a = apps.get(id);
+    if (!a) throw bad(404, "Unknown app");
+    if (req.body?.reset) { // back to the vault poster (the Forward Bot re-sends it within ~90 s)
+      a.customImg = false; a.imgv = 0; imgs.delete(id); R("DEL", "store:img:" + id); saveApp(a);
+      return res.json({ ok: true, app: pubAdmin(a) });
+    }
+    const mime = String(req.body?.mime || "");
+    const buf = Buffer.from(String(req.body?.b64 || ""), "base64");
+    if (!IMG_OK[mime]) throw bad(400, "Use a JPEG, PNG or WebP image");
+    if (!buf.length || buf.length > 900_000) throw bad(413, "Poster must be under 900 KB");
+    if (!IMG_OK[mime](buf)) throw bad(400, "That file is not a valid image");
+    imgs.set(id, { mime, buf });
+    await R("SET", "store:img:" + id, mime + "," + buf.toString("base64"));
+    a.customImg = true; a.imgv = now(); saveApp(a);
+    console.log(`[store] admin ${req.user.id} set poster of ${id} (${buf.length} bytes)`);
+    res.json({ ok: true, app: pubAdmin(a) });
   }));
 
   // ---------------------------------------------------------------------------------------------

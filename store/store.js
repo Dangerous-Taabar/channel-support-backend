@@ -399,7 +399,11 @@ module.exports = function createStoreRouter(redis) {
     }
     // apps that are shown but have no poster stored (never uploaded, or an admin reset it): the Forward Bot sends its own
     const needImg = [...apps.values()].filter((a) => !a.off && !a.imgv).map((a) => a.id);
-    res.json({ ok: true, upserted: n, total: apps.size, needImg });
+    // posters an admin changed in the Mini App: the Forward Bot saves them into the Vault channel (pendingVault) or
+    // drops its saved override (resetImg) - then confirms with /bot/apps/:id/ack
+    const pendingVault = [...apps.values()].filter((a) => a.vaultPending).map((a) => a.id);
+    const resetImg = [...apps.values()].filter((a) => a.resetReq).map((a) => a.id);
+    res.json({ ok: true, upserted: n, total: apps.size, needImg, pendingVault, resetImg });
   }));
 
   router.post("/bot/apps/:id/img", botAuth, wrap(async (req, res) => {
@@ -418,10 +422,37 @@ module.exports = function createStoreRouter(redis) {
     res.json({ ok: true, bytes: buf.length });
   }));
 
+  // Forward Bot: fetch a poster an admin uploaded (to save it into the Vault), and confirm it did
+  router.get("/bot/apps/:id/img", botAuth, wrap(async (req, res) => {
+    await booting;
+    const id = String(req.params.id), a = apps.get(id);
+    if (!a || !/^[PF]\d{1,9}$/.test(id)) throw bad(404, "Unknown app");
+    let im = imgs.get(id);
+    if (!im) {
+      const raw = await R("GET", "store:img:" + id);
+      if (!raw) throw bad(404, "No poster stored");
+      const i = raw.indexOf(",");
+      im = { mime: raw.slice(0, i) || "image/jpeg", buf: Buffer.from(raw.slice(i + 1), "base64") };
+      imgs.set(id, im);
+    }
+    res.json({ mime: im.mime, b64: im.buf.toString("base64"), v: a.imgv || 0 });
+  }));
+  router.post("/bot/apps/:id/ack", botAuth, wrap(async (req, res) => {
+    await booting;
+    const a = apps.get(String(req.params.id));
+    if (!a) throw bad(404, "Unknown app");
+    const b = req.body || {};
+    // only if it is still the same poster the Forward Bot saw (an admin may have uploaded a newer one meanwhile)
+    if (b.vaultSaved && (a.imgv || 0) === Number(b.imgv || 0)) { a.vaultPending = false; a.customImg = false; }
+    if (b.resetDone) a.resetReq = false;
+    saveApp(a);
+    res.json({ ok: true });
+  }));
+
   // Forward Bot: what the store really shows (price / days after admin edits) - for /storelist; and clear an admin's edit
   router.get("/bot/apps", botAuth, wrap(async (req, res) => {
     await booting;
-    res.json({ apps: [...apps.values()].map((a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", price: effPrice(a), days: effDays(a), rev: a.rev || 0, hidden: hiddenOf(a), off: !!a.off, ovr: a.ovr || {}, custom: !!a.customImg, img: !!a.imgv, dl: downloads.get(a.id) || 0 })) });
+    res.json({ apps: [...apps.values()].map((a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", price: effPrice(a), days: effDays(a), rev: a.rev || 0, hidden: hiddenOf(a), off: !!a.off, ovr: a.ovr || {}, custom: !!a.customImg, vaultPending: !!a.vaultPending, img: !!a.imgv, dl: downloads.get(a.id) || 0 })) });
   }));
   router.post("/bot/apps/:id/ovr", botAuth, wrap(async (req, res) => {
     await booting;
@@ -450,7 +481,7 @@ module.exports = function createStoreRouter(redis) {
     const id = String(req.params.id), a = apps.get(id);
     if (!a) throw bad(404, "Unknown app");
     if (req.body?.reset) { // back to the vault poster (the Forward Bot re-sends it within ~90 s)
-      a.customImg = false; a.imgv = 0; imgs.delete(id); R("DEL", "store:img:" + id); saveApp(a);
+      a.customImg = false; a.vaultPending = false; a.resetReq = true; a.imgv = 0; imgs.delete(id); R("DEL", "store:img:" + id); saveApp(a);
       return res.json({ ok: true, app: pubAdmin(a) });
     }
     const mime = String(req.body?.mime || "");
@@ -460,7 +491,7 @@ module.exports = function createStoreRouter(redis) {
     if (!IMG_OK[mime](buf)) throw bad(400, "That file is not a valid image");
     imgs.set(id, { mime, buf });
     await R("SET", "store:img:" + id, mime + "," + buf.toString("base64"));
-    a.customImg = true; a.imgv = now(); saveApp(a);
+    a.customImg = true; a.vaultPending = true; a.resetReq = false; a.imgv = now(); saveApp(a);
     console.log(`[store] admin ${req.user.id} set poster of ${id} (${buf.length} bytes)`);
     res.json({ ok: true, app: pubAdmin(a) });
   }));

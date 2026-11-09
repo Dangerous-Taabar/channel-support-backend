@@ -198,7 +198,7 @@ module.exports = function createStoreRouter(redis) {
   const hiddenOf = (a) => !!(a.off || (a.ovr && a.ovr.hidden)); // off = the Forward Bot dropped it, ovr.hidden = an admin hid it
   const effPrice = (a) => (a.ovr && a.ovr.price != null ? a.ovr.price : a.price);
   const effDays = (a) => (a.ovr && a.ovr.days != null ? a.ovr.days : a.days || 0);
-  const pub = (a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", desc: a.desc || "", price: effPrice(a), days: effDays(a), added: a.added || "", dl: downloads.get(a.id) || 0, img: a.imgv ? a.imgv : 0 });
+  const pub = (a) => ({ id: a.id, name: a.name, category: a.category, version: a.version || "", desc: a.desc || "", price: effPrice(a), days: effDays(a), rev: a.rev || 0, added: a.added || "", dl: downloads.get(a.id) || 0, img: a.imgv ? a.imgv : 0 });
   const pubAdmin = (a) => ({ ...pub(a), adm: { hidden: hiddenOf(a), off: !!a.off, custom: !!a.customImg, ovr: a.ovr || {} } });
 
   // a library entry is "active", or why it is not: "expired" (time ran out) / "outdated" (a new version came out and re-buy is on)

@@ -403,19 +403,29 @@ module.exports = function createStoreRouter(redis) {
   const pubReq = (r, uid) => ({ id: r.id, name: r.name, note: r.note, votes: r.votes.size, voted: r.votes.has(uid), mine: r.uid === uid, createdAt: r.createdAt });
   router.get("/requests", userAuth, wrap(async (req, res) => {
     const list = [...reqs.values()].filter((r) => r.status === "open").sort((a, b) => b.votes.size - a.votes.size || b.createdAt - a.createdAt).slice(0, 60);
-    res.json({ requests: list.map((r) => pubReq(r, req.user.id)) });
+    const recent = [...reqs.values()].filter((r) => r.status === "done" && now() - (r.doneAt || 0) < 14 * 86400_000).sort((a, b) => b.doneAt - a.doneAt).slice(0, 8);
+    res.json({ requests: list.map((r) => pubReq(r, req.user.id)), recent: recent.map((r) => ({ id: r.id, name: r.name, doneAt: r.doneAt })) });
   }));
+  const normName = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   router.post("/request", userAuth, wrap(async (req, res) => {
     const u = req.user;
     const name = cleanText(req.body?.name, 60), note = cleanText(req.body?.note, 200);
     if (name.length < 2) throw bad(400, "App ka naam likho.");
+    // already in the store? tell the person instead of making a pointless request ("Request anyway" sends force: true)
+    if (!req.body?.force) {
+      const q = normName(name);
+      if (q.length >= 3) {
+        const hits = [...apps.values()].filter((a) => !hiddenOf(a)).filter((a) => { const n = normName(a.name); return n === q || (q.length >= 4 && n.length >= 4 && (n.includes(q) || q.includes(n))); }).slice(0, 4);
+        if (hits.length) return res.json({ exists: hits.map(pub) });
+      }
+    }
     const lower = name.toLowerCase();
     const same = [...reqs.values()].find((r) => r.status === "open" && r.name.toLowerCase() === lower);
     if (same) { same.votes.add(u.id); saveReq(same); return res.json({ merged: true, request: pubReq(same, u.id) }); }
     const day = new Date().toISOString().slice(0, 10);
     const mine = [...reqs.values()].filter((r) => r.uid === u.id && new Date(r.createdAt).toISOString().slice(0, 10) === day).length;
     if (mine >= 3) throw bad(429, "Aaj ki 3 requests ho chuki hain. Kal phir try karo.");
-    const r = { id: rid(5), uid: u.id, uname: u.name, name, note, votes: new Set([u.id]), status: "open", createdAt: now() };
+    const r = { id: rid(5), uid: u.id, uname: u.name, name, note, votes: new Set([u.id]), status: "open", createdAt: now(), notified: false };
     reqs.set(r.id, r); saveReq(r);
     res.json({ merged: false, request: pubReq(r, u.id) });
   }));
@@ -634,18 +644,52 @@ module.exports = function createStoreRouter(redis) {
     res.json({ id: o.id, uid: o.uid, appId: o.appId, appName: o.appName, status: o.status });
   }));
 
-  // ---- requests, owner side (Forward Bot /storerequests, /storedone)
+  // ---- requests, owner side (Forward Bot: instant DM to admins, buttons, /storerequests, /storedone)
   router.get("/bot/requests", botAuth, wrap(async (req, res) => {
     await booting;
     const list = [...reqs.values()].filter((r) => r.status === "open").sort((a, b) => b.votes.size - a.votes.size || b.createdAt - a.createdAt).slice(0, 40);
-    res.json({ requests: list.map((r) => ({ id: r.id, name: r.name, note: r.note, votes: r.votes.size, by: r.uname })) });
+    res.json({ requests: list.map((r) => ({ id: r.id, name: r.name, note: r.note, votes: r.votes.size, by: r.uname, uid: r.uid, notified: !!r.notified })) });
+  }));
+  router.post("/bot/requests/:id/ack", botAuth, wrap(async (req, res) => { // the admins got the DM for this request
+    await booting;
+    const r = reqs.get(String(req.params.id));
+    if (!r) throw bad(404, "Request not found");
+    r.notified = true; saveReq(r);
+    res.json({ ok: true });
   }));
   router.post("/bot/requests/:id/done", botAuth, wrap(async (req, res) => {
     await booting;
     const r = reqs.get(String(req.params.id));
     if (!r) throw bad(404, "Request not found");
+    if (r.status !== "open") return res.json({ ok: true, already: true, status: r.status, name: r.name, voters: [] }); // never notify twice
     r.status = "done"; r.doneAt = now(); saveReq(r);
     res.json({ ok: true, name: r.name, voters: [...r.votes] });
+  }));
+  router.post("/bot/requests/:id/reject", botAuth, wrap(async (req, res) => {
+    await booting;
+    const r = reqs.get(String(req.params.id));
+    if (!r) throw bad(404, "Request not found");
+    if (r.status !== "open") return res.json({ ok: true, already: true, status: r.status, name: r.name, requester: r.uid });
+    r.status = "rejected"; r.doneAt = now(); saveReq(r);
+    res.json({ ok: true, name: r.name, requester: r.uid });
+  }));
+
+  // DM people through THIS app's bot (the one they opened the store with) - the Forward Bot uses it when its own DM fails
+  router.post("/bot/notify", botAuth, wrap(async (req, res) => {
+    const uids = (Array.isArray(req.body?.uids) ? req.body.uids : []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, 200);
+    const text = String(req.body?.text || "").slice(0, 1000);
+    if (!uids.length || !text) throw bad(400, "uids and text are required");
+    const url = String(req.body?.button_url || "");
+    const markup = /^https:\/\/t\.me\//.test(url) ? { inline_keyboard: [[{ text: String(req.body?.button_text || "Open").slice(0, 40), url }]] } : undefined;
+    let sent = 0;
+    for (const uid of uids) {
+      try {
+        const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: uid, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup }) });
+        if ((await r.json()).ok) sent++;
+      } catch {}
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    res.json({ ok: true, sent, total: uids.length });
   }));
 
   return router;

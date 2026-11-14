@@ -895,7 +895,26 @@ async function shortlinkTestText(cfg) {
 //   • per-user cooldown: one user gets AT MOST one reminder per N minutes (default 30)  (/nudge cooldown 45)
 // Redis: nudge_enabled ('0' = off, default ON) · nudge_cooldown_min · nudge_cd:<userId> (expires by itself)
 // ---------------------------------------------------------------------------
-const NUDGE_DEFAULT_COOLDOWN_MIN = 30, NUDGE_MAX_COOLDOWN_MIN = 1440;
+const NUDGE_DEFAULT_COOLDOWN_MIN = 30, NUDGE_MAX_COOLDOWN_MIN = 30 * 24 * 60;   // 1 minute .. 30 days (stored in minutes)
+// 90 -> "1 ghante 30 min", 1440 -> "1 din", 2160 -> "1 din 12 ghante"
+function fmtCooldown(totalMin) {
+  const d = Math.floor(totalMin / 1440), h = Math.floor((totalMin % 1440) / 60), m = totalMin % 60, parts = [];
+  if (d) parts.push(`${d} din`); if (h) parts.push(`${h} ghante`); if (m) parts.push(`${m} min`);
+  return parts.join(' ') || '0 min';
+}
+// "45" (bare number = minutes) · "45m" · "2h" · "1d" · "1d 12h 30m" · "1.5h" · "2 ghante" · "1 din"  ->  minutes, or NaN
+function parseCooldownMinutes(text) {
+  const t = String(text || '').toLowerCase().replace(/,/g, ' ').trim();
+  const UNIT = { m: 1, min: 1, mins: 1, minute: 1, minutes: 1, h: 60, hr: 60, hrs: 60, hour: 60, hours: 60, ghanta: 60, ghante: 60, d: 1440, day: 1440, days: 1440, din: 1440 };
+  const re = /(\d+(?:\.\d+)?)\s*([a-z]*)/g, tokens = []; let m;
+  while ((m = re.exec(t))) tokens.push([Number(m[1]), m[2]]);
+  if (!tokens.length || t.replace(/(\d+(?:\.\d+)?)\s*([a-z]*)/g, '').trim() !== '') return NaN;
+  if (tokens.length > 1 && tokens.some(x => x[1] === '')) return NaN;          // a bare number is only allowed on its own
+  let total = 0;
+  for (const [n, u] of tokens) { const mult = u === '' ? 1 : UNIT[u]; if (!mult) return NaN; total += n * mult; }
+  total = Math.round(total);
+  return total >= 1 && total <= NUDGE_MAX_COOLDOWN_MIN ? total : NaN;
+}
 async function nudgeSettings() {
   let enabled = true, cooldownMin = NUDGE_DEFAULT_COOLDOWN_MIN;
   try {
@@ -906,7 +925,7 @@ async function nudgeSettings() {
   return { enabled, cooldownMin };
 }
 function nudgeStatusText(st) {
-  return `💬 <b>Group Reminder</b> (“Pehle support karo 👇”)\nStatus: <b>${st.enabled ? 'ON ✅' : 'OFF ⛔'}</b>\nCooldown: <b>${st.cooldownMin} min</b> — ek user ko itne time me sirf ek reminder\n\n<code>/nudge on</code> · <code>/nudge off</code> · <code>/nudge cooldown 45</code> · <code>/nudge status</code>`;
+  return `💬 <b>Group Reminder</b> (“Pehle support karo 👇”)\nStatus: <b>${st.enabled ? 'ON ✅' : 'OFF ⛔'}</b>\nCooldown: <b>${fmtCooldown(st.cooldownMin)}</b> — ek user ko itne time me sirf ek reminder\n\n<code>/nudge on</code> · <code>/nudge off</code> · <code>/nudge status</code>\n<code>/nudge cooldown 45m</code> · <code>2h</code> · <code>1d</code> · <code>1d 12h</code>`;
 }
 // words = what follows "/nudge". Returns the reply text (HTML).
 async function nudgeApply(words) {
@@ -914,10 +933,10 @@ async function nudgeApply(words) {
   if (sub === 'on') { await redisCommand(['DEL', 'nudge_enabled']); return '✅ Group reminder <b>ON</b> ho gaya.\n\n' + nudgeStatusText(await nudgeSettings()); }
   if (sub === 'off') { await redisCommand(['SET', 'nudge_enabled', '0']); return '⛔ Group reminder <b>OFF</b> — ab bot group me kisi ko "support karo" nahi bolega.\n\n' + nudgeStatusText(await nudgeSettings()); }
   if (sub === 'cooldown') {
-    const n = /^\d{1,5}$/.test(String(words[1] || '')) ? parseInt(words[1], 10) : NaN;
-    if (!(n >= 1 && n <= NUDGE_MAX_COOLDOWN_MIN)) return `⚠️ Cooldown 1 se ${NUDGE_MAX_COOLDOWN_MIN} minute ke beech ka number hona chahiye.\nExample: <code>/nudge cooldown 45</code>`;
+    const n = parseCooldownMinutes(words.slice(1).join(' '));
+    if (!(n >= 1)) return '⚠️ Samay samajh nahi aaya. 1 minute se 30 din ke beech do:\n<code>/nudge cooldown 45m</code> · <code>2h</code> · <code>1d</code> · <code>1d 12h</code>\n<i>(sirf number likhoge to minute maana jayega)</i>';
     await redisCommand(['SET', 'nudge_cooldown_min', String(n)]);
-    return `⏱ Cooldown <b>${n} min</b> set ho gaya.\n\n` + nudgeStatusText(await nudgeSettings());
+    return `⏱ Cooldown <b>${fmtCooldown(n)}</b> set ho gaya — ab ek user ko <b>${fmtCooldown(n)}</b> me sirf ek reminder milega.\n\n` + nudgeStatusText(await nudgeSettings());
   }
   if (sub === 'status') return nudgeStatusText(await nudgeSettings());
   return nudgeStatusText(await nudgeSettings());
@@ -1721,7 +1740,7 @@ const _PANEL_ASK = {
   },
   'nudge_cooldown': {
     title: 'GROUP REMINDER COOLDOWN',
-    instruction: 'Cooldown <b>minutes</b> me bhejo (1 se 1440).\nEk user ko itne time me sirf <b>ek</b> "support karo" reminder milega.\nExample: <code>30</code>',
+    instruction: 'Kitne time me ek user ko <b>ek</b> reminder mile? 1 minute se 30 din tak bhejo:\n<code>45m</code> · <code>2h</code> · <code>1d</code> · <code>1d 12h</code>\n<i>Sirf number likhoge to minute maana jayega.</i>',
     section: 'settings'
   },
   'set_shortlink': {

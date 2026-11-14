@@ -888,12 +888,54 @@ async function shortlinkTestText(cfg) {
   try { return `🧪 <b>${esc(cfg.provider)}</b> OK ✅\nShort link bana: <code>${esc(await shortenWithProvider(cfg, `${PUBLIC_BASE_URL}/api/support/callback?session=test&token=test`))}</code>`; }
   catch (e) { return `🧪 <b>${esc(cfg.provider)}</b> FAIL ❌\n${esc(e.message)}\n\nUsers ko abhi fallback (Custom Ad Task) mil raha hai.`; }
 }
+// ---------------------------------------------------------------------------
+// GROUP REMINDER — the "Pehle support karo 👇 [Support Now]" reply the bot gives non-supporters who write in the
+// community's General topic. Controls:
+//   • ON/OFF switch  (/nudge on | off  ·  Panel → Settings → 💬 Group Reminder)
+//   • per-user cooldown: one user gets AT MOST one reminder per N minutes (default 30)  (/nudge cooldown 45)
+// Redis: nudge_enabled ('0' = off, default ON) · nudge_cooldown_min · nudge_cd:<userId> (expires by itself)
+// ---------------------------------------------------------------------------
+const NUDGE_DEFAULT_COOLDOWN_MIN = 30, NUDGE_MAX_COOLDOWN_MIN = 1440;
+async function nudgeSettings() {
+  let enabled = true, cooldownMin = NUDGE_DEFAULT_COOLDOWN_MIN;
+  try {
+    enabled = (await redisCommand(['GET', 'nudge_enabled'])) !== '0';
+    const n = parseInt(await redisCommand(['GET', 'nudge_cooldown_min']), 10);
+    if (n >= 1 && n <= NUDGE_MAX_COOLDOWN_MIN) cooldownMin = n;
+  } catch (e) { /* defaults */ }
+  return { enabled, cooldownMin };
+}
+function nudgeStatusText(st) {
+  return `💬 <b>Group Reminder</b> (“Pehle support karo 👇”)\nStatus: <b>${st.enabled ? 'ON ✅' : 'OFF ⛔'}</b>\nCooldown: <b>${st.cooldownMin} min</b> — ek user ko itne time me sirf ek reminder\n\n<code>/nudge on</code> · <code>/nudge off</code> · <code>/nudge cooldown 45</code> · <code>/nudge status</code>`;
+}
+// words = what follows "/nudge". Returns the reply text (HTML).
+async function nudgeApply(words) {
+  const sub = String(words[0] || 'status').toLowerCase();
+  if (sub === 'on') { await redisCommand(['DEL', 'nudge_enabled']); return '✅ Group reminder <b>ON</b> ho gaya.\n\n' + nudgeStatusText(await nudgeSettings()); }
+  if (sub === 'off') { await redisCommand(['SET', 'nudge_enabled', '0']); return '⛔ Group reminder <b>OFF</b> — ab bot group me kisi ko "support karo" nahi bolega.\n\n' + nudgeStatusText(await nudgeSettings()); }
+  if (sub === 'cooldown') {
+    const n = /^\d{1,5}$/.test(String(words[1] || '')) ? parseInt(words[1], 10) : NaN;
+    if (!(n >= 1 && n <= NUDGE_MAX_COOLDOWN_MIN)) return `⚠️ Cooldown 1 se ${NUDGE_MAX_COOLDOWN_MIN} minute ke beech ka number hona chahiye.\nExample: <code>/nudge cooldown 45</code>`;
+    await redisCommand(['SET', 'nudge_cooldown_min', String(n)]);
+    return `⏱ Cooldown <b>${n} min</b> set ho gaya.\n\n` + nudgeStatusText(await nudgeSettings());
+  }
+  if (sub === 'status') return nudgeStatusText(await nudgeSettings());
+  return nudgeStatusText(await nudgeSettings());
+}
+const nudgeAllowed = async (userId) => { try { return await cbIsAdmin(userId); } catch (e) { return false; } }; // owners + panel-added admins
+
 async function handleOwnerCommand(text, userId, msgId) {
   const lower = text.toLowerCase();
 
   if (lower === '/shortlinkstatus') {
     const cfg = await getShortlinkConfig();
     await tgSendText(userId, `🔗 <b>Current Shortlink Provider</b>\n\nProvider: <code>${esc(cfg.provider)}</code>\nAPI URL: <code>${esc(cfg.apiUrl || '(custom ad task)')}</code>\nAPI Key: <code>${maskKey(cfg.apiKey)}</code>`, { parse_mode: 'HTML' });
+    return true;
+  }
+
+  if (/^\/nudge(@\S+)?(\s|$)/.test(lower)) {
+    if (!(await nudgeAllowed(userId))) { await tgSendText(userId, '❌ Ye command sirf Owner / panel-admin ke liye hai.'); return true; }
+    await tgSendText(userId, await nudgeApply(text.split(/\s+/).slice(1)), { parse_mode: 'HTML' });
     return true;
   }
 
@@ -1540,6 +1582,7 @@ const _PANEL_SECTIONS = {
     buttons: [
       [{ label: '🎭 Set Season Theme', kind: 'ask', action: 'set_season' }],
       [{ label: '📍 Support Topic Status', kind: 'do', action: 'topic_status' }],
+      [{ label: '💬 Group Reminder (on/off)', kind: 'do', action: 'nudge_toggle' }, { label: '⏱ Reminder Cooldown', kind: 'ask', action: 'nudge_cooldown' }],
       [{ label: '🔗 Set Shortlink Provider', kind: 'ask', action: 'set_shortlink' }, { label: '🧪 Test Shortlink', kind: 'do', action: 'shortlink_test' }],
     ]
   },
@@ -1674,6 +1717,11 @@ const _PANEL_ASK = {
   'set_season': {
     title: 'SET FESTIVAL SEASON',
     instruction: 'Active season theme ka naam bhejo:\n<code>normal</code> | <code>navratri</code> | <code>diwali</code>',
+    section: 'settings'
+  },
+  'nudge_cooldown': {
+    title: 'GROUP REMINDER COOLDOWN',
+    instruction: 'Cooldown <b>minutes</b> me bhejo (1 se 1440).\nEk user ko itne time me sirf <b>ek</b> "support karo" reminder milega.\nExample: <code>30</code>',
     section: 'settings'
   },
   'set_shortlink': {
@@ -2643,6 +2691,14 @@ async function handlePanelDo(action, chatId, messageId, userId, fromUser) {
     return;
   }
 
+  if (action === 'nudge_toggle') {
+    if (!(await nudgeAllowed(userId))) { await tgSendText(chatId, '❌ Reminder on/off sirf Owner / panel-admin kar sakte hain.'); return; }
+    const st = await nudgeSettings();
+    const text = await nudgeApply([st.enabled ? 'off' : 'on']);
+    await tgEdit(chatId, messageId, text, { inline_keyboard: [[{ text: st.enabled ? '✅ Turn ON' : '⛔ Turn OFF', callback_data: 'panel:do:nudge_toggle' }], [{ text: '⏱ Cooldown', callback_data: 'panel:ask:nudge_cooldown' }, { text: '🎨 Settings', callback_data: 'panel:s:settings' }]] }, 'HTML');
+    return;
+  }
+
   if (action === 'shortlink_test') {
     const cfg = await getShortlinkConfig();
     await tgEdit(chatId, messageId, await shortlinkTestText(cfg), { inline_keyboard: [[{ text: '🔗 Config', callback_data: 'panel:do:shortlink_stats' }, { text: '🎨 Settings', callback_data: 'panel:s:settings' }]] }, 'HTML');
@@ -3071,6 +3127,14 @@ async function handlePanelPendingInput(msg) {
     return true;
   }
 
+  if (action === 'nudge_cooldown') {
+    if (!(await nudgeAllowed(userId))) { await tgSendText(msg.chat.id, '❌ Ye setting sirf Owner / panel-admin badal sakte hain.'); return true; }
+    const reply = await nudgeApply(['cooldown', rawText]);
+    if (/^⚠️/.test(reply)) panelPending.set(userId, { action: 'nudge_cooldown', ts: Date.now(), section: 'settings' }); // let them retype
+    await tgSendText(msg.chat.id, reply, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💬 Reminder On/Off', callback_data: 'panel:do:nudge_toggle' }, { text: '🎨 Settings', callback_data: 'panel:s:settings' }]] } });
+    return true;
+  }
+
   if (action === 'set_shortlink') {
     const words = rawText.split(/\s+/);
     const r = await applyShortlinkSetting(words);
@@ -3353,6 +3417,20 @@ app.post('/api/telegram/webhook', async (req, res) => {
       }
     }
 
+    // ---- CASE 1.35: /nudge on|off|status|cooldown <min> — owner / panel-admin (anonymous group admins too), in any group topic ----
+    if (msg.text && /^\/nudge(@\S+)?(\s|$)/i.test(msg.text.trim()) && msg.chat.type !== 'private') {
+      const anonAdmin = !!(msg.sender_chat && msg.sender_chat.id === msg.chat.id);
+      if (anonAdmin || (msg.from && await nudgeAllowed(msg.from.id))) {
+        const reply = await nudgeApply(msg.text.trim().split(/\s+/).slice(1));
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: msg.chat.id, ...(msg.is_topic_message && msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {}), reply_to_message_id: msg.message_id, text: reply, parse_mode: 'HTML' })
+        }).catch(() => {});
+        return;
+      }
+      // anyone else: ignore the command here and let the normal group rules below apply
+    }
+
     // ---- CASE 1.5: /preview (or /testcard) [silver|gold|diamond] — admin-only: posts a sample certificate ----
     if (msg.text && /^\/(testcard|preview|testcert)(@\S+)?(\s|$)/i.test(msg.text.trim())) {
       const isPriv = msg.chat.type === 'private';
@@ -3484,6 +3562,8 @@ app.post('/api/telegram/webhook', async (req, res) => {
       // (Anonymous admin arrives as from = GroupAnonymousBot + sender_chat = this group.)
       if (!msg.from || msg.sender_chat || msg.from.is_bot ||
           [1087968824, 136817688, 777000].includes(Number(msg.from.id))) return;
+      const nudgeCfg = await nudgeSettings();
+      if (!nudgeCfg.enabled) return;                                   // reminder switched OFF with /nudge off
       const userId = msg.from.id;
       const tgDeleteMsg = (msgId) => fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3512,6 +3592,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
       } catch (e) { /* fail open-ish: treat as not-supported below */ }
 
       if (!isCurrentlyActive(supporter)) {
+        // One reminder per user per cooldown window (atomic SET NX EX). If Redis is unavailable stay silent rather than spam.
+        let canRemind = false;
+        try { canRemind = (await redisCommand(['SET', 'nudge_cd:' + userId, '1', 'EX', String(nudgeCfg.cooldownMin * 60), 'NX'])) === 'OK'; } catch (e) { canRemind = false; }
+        if (!canRemind) return;
         const joke = NUDGE_JOKES[Math.floor(Math.random() * NUDGE_JOKES.length)];
         const siteUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL;
         const tag = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
@@ -4136,7 +4220,7 @@ async function tgApiPost(method, body) {
 async function setAdminCommands(userId, isAdmin) {
   if (!process.env.TELEGRAM_BOT_TOKEN || !/^\d+$/.test(String(userId))) return;
   const scope = { type: 'chat', chat_id: Number(userId) };
-  if (isAdmin) await tgApiPost('setMyCommands', { commands: [...BOT_USER_COMMANDS, { command: 'panel', description: '🛠 Control panel' }, { command: 'backupcards', description: '💾 Backup cards' }, { command: 'preview', description: '🧪 Test certificate' }], scope });
+  if (isAdmin) await tgApiPost('setMyCommands', { commands: [...BOT_USER_COMMANDS, { command: 'panel', description: '🛠 Control panel' }, { command: 'backupcards', description: '💾 Backup cards' }, { command: 'preview', description: '🧪 Test certificate' }, { command: 'nudge', description: '💬 Group reminder on/off' }], scope });
   else await tgApiPost('deleteMyCommands', { scope });
 }
 async function setupBotCommands() {
